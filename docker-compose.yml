@@ -1,0 +1,49 @@
+# Docker Compose configuration for VAST Admin MCP
+# 
+# Usage:
+#   docker-compose up -d          # Start container in background
+#   docker-compose exec app <cmd>   # Execute command in running container
+#   docker-compose down             # Stop and remove container
+#
+# To run CLI commands:
+#   docker-compose exec app vast-admin-mcp list clusters
+#   docker-compose exec app vast-admin-mcp setup
+
+version: '3.8'
+
+services:
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args:
+        VERSION: ${VERSION:-0.1.0}
+        BUILD_DATE: ${BUILD_DATE}
+        VCS_REF: ${VCS_REF}
+    image: vast-admin-mcp:${VERSION:-latest}
+    container_name: vast-admin-mcp
+    volumes:
+      # Mount config directory from host (contains config.json, template modifications, logs)
+      - ~/.vast-admin-mcp:/root/.vast-admin-mcp
+      # Optionally mount default template file if you want to override it
+      # Uncomment and adjust path if needed:
+      # - ./mcp_list_cmds_template.yaml:/app/mcp_list_cmds_template.yaml:ro
+      # Optionally mount tool config directories for mcpsetup --config
+      # Uncomment and adjust as needed:
+      # - ~/.cursor:/root/.cursor
+      # - ~/Library/Application Support/Claude:/root/.config/Claude  # macOS
+      # - ~/.config/Claude:/root/.config/Claude  # Linux
+      # - ~/.codeium/windsurf:/root/.codeium/windsurf
+      # - ~/.vscode:/root/.vscode
+    environment:
+      - DOCKER_CONTAINER=true
+      - DOCKER_CONTAINER_NAME=vast-admin-mcp
+      - DOCKER_IMAGE=vast-admin-mcp:${VERSION:-latest}
+      - HOST_CONFIG_DIR=${HOME}/.vast-admin-mcp
+      - VAST_ADMIN_MCP_VERSION=${VERSION:-0.1.0}
+      - FORCE_ENCRYPTED_STORAGE=true
+    # Keep container running (useful for docker exec)
+    command: tail -f /dev/null
+    stdin_open: true
+    tty: true
+

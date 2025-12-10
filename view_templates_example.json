@@ -1,0 +1,42 @@
+[
+    {
+        "name": "vmware",
+        "cluster": "vast3115-var",
+        "tenant": "tenant1",
+        "path_prefix": "/vmware/ds_",
+        "view_policy": "tenant1__default_policy",
+        "hard_quota": "1TB",
+        "protocols": "NFS",
+        "bucket_prefix": "",
+        "bucket_owner": "",
+        "share_prefix": "",
+	    "qos_policy": "low"
+    }, 
+    {
+        "name": "s3_backup",
+        "cluster": "v3115",
+        "tenant": "tenant1",
+        "path_prefix": "/s3/backup_",
+        "view_policy": "tenant1__s3_default_policy",
+        "hard_quota": "500GB",
+        "protocols": "S3",
+        "bucket_prefix": "backup-",
+        "bucket_owner": "s3",
+        "share_prefix": "",
+        "qos_policy": "low"
+    }, 
+    {
+        "name": "projects",
+        "cluster": "v3115",
+        "tenant": "default",
+        "path_prefix": "/smb/projects_",
+        "view_policy": "tenant1__default_policy",
+        "hard_quota": "2TB",
+        "protocols": "SMB,NFS",
+        "bucket_prefix": "",
+        "bucket_owner": "",        
+        "share_prefix": "projects_",
+        "qos_policy": "low"        
+    }
+
+]

@@ -1,0 +1,1276 @@
+# YAML Template Structure for VAST Admin MCP
+# This file defines dynamic list commands for VAST cluster administration
+#
+# Structure:
+#   - variables: String replacements for use in descriptions ({{placeholder_name}})
+#   - field_anchors: Reusable field definitions using YAML anchors
+#   - list_cmds: Command definitions for dynamic list tools
+
+# ============================================================================
+# API Whitelist Section
+# ============================================================================
+# Restrictive by default: If api_whitelist is empty or missing, ALL API endpoints are DENIED.
+# Only endpoints listed here (or their parent endpoints for sub-endpoints) are allowed.
+# 
+# Format:
+#   - Simple: `- endpoint_name` (allows only GET method by default)
+#   - With methods: `- endpoint_name: [post]` (allows GET + specified methods)
+#     Example: `- views: [post]` enables both GET and POST for views endpoint
+# 
+# Sub-endpoint behavior:
+#   - If parent endpoint is whitelisted (e.g., `monitors`), all sub-endpoints are allowed
+#   - Example: If `monitors` is whitelisted, then `monitors.ad_hoc_query` is automatically allowed
+#   - Example: If `dashboard` is whitelisted, then `dashboard.status` is automatically allowed
+#
+# Currently used endpoints (automatically discovered from codebase):
+api_whitelist:
+  # Core cluster endpoints
+  - clusters
+  - tenants
+  - cnodes
+  - dnodes
+  - eboxes
+  - cboxes
+  - dboxes
+
+  
+  # Storage endpoints when empty list of methods, it allows only GET method by default
+  - views: [post]  # GET + POST for create operations
+  - volumes
+  - snapshots: [post]  # GET + POST for create operations
+  - quotas: [post, patch]  # GET + POST + PATCH for create/update operations
+  - vippools
+  - dns
+  
+  # Policy and protection endpoints
+  - viewpolicies
+  - protectionpolicies
+  - protectedpaths
+  - alarms
+  - nativereplicationremotetargets
+  
+  # Monitoring and metrics endpoints
+  - metrics
+  - monitors  # Allows all sub-endpoints like monitors.ad_hoc_query
+  - capacity
+  
+  # User and host management
+  - hosts
+  - monitoredusers
+  
+  # directory and identity endpoints
+  - activedirectory
+  - localproviders
+  - users
+  - s3policies
+
+  # System endpoints (for setup/validation)
+  - login
+  - dashboard  # Allows all sub-endpoints like dashboard.status
+  - supportbundles
+
+# ============================================================================
+# Variables Section
+# ============================================================================
+# Variables can be referenced in descriptions using {{variable_name}} syntax
+# These are replaced during template loading
+variables:
+  cluster_warning: |-
+    IMPORTANT: By default, when no cluster is specified, this tool queries ALL clusters from configuration. 
+    To query a specific cluster, provide cluster name(s) in the cluster argument. IMPORTANT: When user asks for "all clusters" or "all available clusters",   
+    you MUST FIRST call list_clusters_vast to discover all available cluster names, then pass them here as 
+    comma-separated values (e.g., "cluster1,cluster2,cluster3") to the cluster argument.
+  prefer_tables: |-
+    When presenting data in a table format, prefer to use the table format over the list format.
+    Only use tables when they are more readable and easier to understand.
+
+# ============================================================================
+# Field Anchors Section
+# ============================================================================
+# Reusable field definitions that can be referenced in list_cmds using YAML anchor syntax
+# Example: - <<: *cluster_field
+# These anchors are defined here and can be reused across multiple commands
+field_anchors:
+  # Cluster field - reusable across all commands
+  cluster_field: &cluster_field
+    name: cluster
+    argument:
+      type: list
+      mandatory: false
+      description: >-
+        Comma-separated list of cluster names. {{cluster_warning}} When empty or not specified, queries all clusters from configuration.
+      regex_validation: ^[A-Za-z][^,]*(\s*,\s*[A-Za-z][^,]*)*$
+      # When provided as a list, the value will be a list of clusters with comma separated values 
+      argument_list: true
+      aliases:
+      - clusters
+      - cluster_names
+      - cluster_list
+      - cluster_names_list
+
+  # Tenant field - reusable across all commands
+  tenant_field: &tenant_field
+    name: tenant
+    field: tenant_name 
+    argument: 
+      type: str
+      mandatory: false
+      filter: true
+      aliases:
+      - tenant_name
+      - tenant_names
+      - virtual server
+
+# ============================================================================
+# List Commands Section
+# ============================================================================
+# All dynamic list commands are defined here
+# Each command must have: api_endpoints, fields, and description
+list_cmds:
+  # Views command - list views from VAST cluster(s)
+  views:
+    # API endpoints to call (first endpoint is the primary data source)
+    api_endpoints: 
+    - views
+    - quotas
+
+    # Selected fields for simplified view 
+    fields:
+      # Use the cluster field anchor (reference with <<: *cluster_field)
+      - <<: *cluster_field 
+      
+      # When API property is different than what we want to show as header
+      - name: tenant
+        # When provided, it means that the API property is different than the header we want to show
+        field: tenant_name 
+        argument: 
+          type: str
+          mandatory: false
+          filter: true
+          aliases:
+          - tenant_name
+          - customer
+      # For fields where the API property is the same as the header we want
+      # Can limit the text width when presenting in a table (very_long_view...blabla1) for better visibility 
+      - name: name
+        argument:
+          type: str
+          mandatory: false
+          filter: true
+      - name: path
+        argument:
+          type: str
+          mandatory: false
+          filter: true
+      - name: view policy
+        field: policy
+      - name: bucket
+        argument:
+          type: str
+          mandatory: false
+          description: Filter views by bucket name. Returns all buckets if not specified. Supports Unix shell-style wildcards (* ? []).
+          filter: true
+        #limit_table_column_width: 10 
+      - name: share
+        argument:
+          type: str
+          mandatory: false
+          description: Filter views by share name. Returns all shares if not specified. Supports Unix shell-style wildcards (* ? []).
+          filter: true
+        #limit_table_column_width: 10 
+      # Transform protocols list to comma-separated string using jq - useful for fields that contain objects (and not strings)
+      - name: protocols
+        jq: join(\",\")
+      # Convert capacity from bytes to requested unit (KB|MB|GB|TB|AUTO)
+      # AUTO selects best fit unit automatically
+      - name: logical used
+        field: logical_capacity
+        convert: AUTO
+        argument:
+          type: int  
+          filter: true    
+          aliases:
+          - space
+          - room
+          - capacity
+          - logical_capacity
+          - logical_used
+          - logical_used_capacity
+          - logical_used_size
+          - logical_used_limit
+
+      - name: physical used
+        field: physical_capacity
+        convert: AUTO
+        argument:
+          type: int 
+          filter: true 
+          aliases:
+          - physical_capacity
+          - physical_used
+          - physical_used_capacity
+          - physical_used_size
+          - physical_used_limit
+      # Display quota hard limit for the view (left join with quotas API on path field in the main API)
+      - name: hard quota
+        field: quotas.hard_limit
+        join_on:
+          field: path
+          on_field: path
+        convert: AUTO
+      # Field can be temporarily hidden by setting hide: true
+      - name: qos policy
+        field: qos_policy
+  
+    # Command description (used for MCP context)
+    description: |-
+      Use this tool to retrieve a list of views from VAST cluster(s). The tool can filter views by tenant, view path, bucket, and share.
+      Args:
+        {{$arguments}}
+      Returns:
+        A list of views. Each item in the list will be a dictionary containing general information regarding a specific view.
+      Fields:
+        {{$fields}}
+
+      {{prefer_tables}}
+
+  # viewpolicies command - list view policies from VAST cluster(s)
+  viewpolicies:
+    # API endpoints to call (first endpoint is the primary data source)
+    api_endpoints: 
+    - viewpolicies
+    - views
+
+    # Selected fields for simplified view 
+    fields:
+      - <<: *cluster_field
+      - <<: *tenant_field
+      - name: name
+        argument:
+          type: str
+          mandatory: false
+          filter: true
+          aliases:
+          - view_policy_name
+          - view_policy_names
+      - name: flavor
+        argument:
+          type: str
+          mandatory: false
+          filter: true
+          aliases:
+          - view_policy_flavor
+          - view_policy_flavors
+      - name: protocols
+        jq: join(",")
+        argument:
+          type: list
+          mandatory: false
+          filter: true
+          aliases:
+          - view_policy_protocols
+      - name: nfs no squash
+        field: nfs_no_squash
+        jq: join(",")
+      - name: nfs root squash
+        field: nfs_root_squash
+        jq: join(",")
+      - name: nfs all squash
+        field: nfs_all_squash
+        jq: join(",")
+      - name: nfs rw
+        field: smb_read_write
+        jq: join(",")
+      - name: nfs ro
+        field: smb_read_only
+        jq: join(",")
+      - name: views
+        description: The list of views that the view policy is applied to.
+        field: views.path
+        join_on:
+          field: name
+          on_field: policy
+          act_on: all
+
+    description: |-
+      Use this tool to retrieve a list of view policies from VAST cluster(s).
+      Args:
+        {{$arguments}}
+      Returns:
+        A list of view policies. Each item in the list will be a dictionary containing general information regarding a specific view policy.
+      Fields:
+        {{$fields}}
+      {{prefer_tables}}
+
+  # Volumes command - list volumes (NVMe over TCP) from VAST cluster(s)
+  volumes:
+    # API endpoints to call (first endpoint is the primary data source)
+    api_endpoints: 
+    - volumes
+
+    # Selected fields for simplified view 
+    fields:
+      # Use the cluster field anchor (reference with <<: *cluster_field)
+      - <<: *cluster_field
+
+      # Use the tenant field anchor (reference with <<: *tenant_field)
+      - <<: *tenant_field 
+
+      - name: name
+        argument:
+          type: str
+          mandatory: false
+          filter: true
+          aliases:
+          - volume_name
+          - namespace
+          - namespace_name
+          - namespaces
+          - lun
+          - logical_unit_number
+          - logical unit
+
+      - name: size
+        convert: AUTO
+        argument:
+          type: int
+          mandatory: false
+          filter: true
+          aliases:
+          - size
+          - capacity
+          - used
+          - used_capacity
+          - volume_size
+          - volume_capacity
+          - volume_used
+          - volume_used_capacity
+          - volume_used_size
+          - volume_used_capacity
+      - name: NVMe Hosts
+        field: mapped_block_hosts_preview
+        argument:
+          type: list
+          mandatory: false
+          filter: true
+          aliases:
+          - hosts_mapping
+          - nqn
+          - subsystem
+          - subsystems
+
+    # Command description (used for MCP context)
+    description: |-
+      Use this tool to retrieve a list of volumes (used for NVME over TCP) from VAST cluster(s). Volume can also be refered as namespace or lun or logical unit.
+      The tool can filter views by tenant, volume and volume size
+      Args:
+        {{$arguments}}
+      Returns:
+        A list of views. Each item in the list will be a dictionary containing general information regarding a specific view.
+      Fields:
+        {{$fields}}
+
+      {{prefer_tables}}
+
+  # Tenants command - list tenants from VAST cluster(s)
+  tenants:
+    # API endpoints to call (first endpoint is the primary data source)
+    api_endpoints: 
+    - tenants    
+    # Per-row endpoints used to get data which needs to be gathered per row in the main endpoint
+    # For each row, an API call is made with query parameters derived from the row data
+    per_row_endpoints:
+    - name: capacity
+      query: 
+      - "tentant_id=$id"
+      - "path=/"
+    # Selected fields for simplified view 
+    fields:
+      # Use the cluster field anchor (reference with <<: *cluster_field)
+      - <<: *cluster_field
+      - name: name
+        argument:
+          type: str
+          mandatory: false
+          filter: true
+          aliases:
+          - tenant_name
+          - tenant_names
+      - name: id
+        hide: true
+      - name: vip pools
+        field: vippool_names
+        jq: join(",")
+        argument:
+          type: list
+          mandatory: false
+          filter: true
+          aliases:
+          - vip_pools
+          - vip_pool_names
+      
+      # Per-row endpoint data is accessed using endpoint.field syntax (e.g., capacity.root_data)
+      - name: usable capacity
+        field: capacity.root_data
+        jq: .[0]
+        convert: AUTO
+
+      - name: logical capacity
+        field: capacity.root_data
+        jq: .[2]
+        convert: AUTO
+
+      - name: unique capacity
+        field: capacity.root_data
+        jq: .[1]
+        convert: AUTO
+
+      - name: hard quota
+        field: capacity_rules
+        jq: .hard_limit
+        convert: AUTO
+
+    # Command description (used for MCP context)
+    description: |-
+      Use this tool to retrieve a list of tenants from VAST cluster(s).
+      Args:
+        {{$arguments}}
+      Returns:
+        A list of tenants. Each item in the list will be a dictionary containing general information regarding a specific tenant.
+        The output inlcudes information about Usable Capacity (The amount of occupied by data written by the user after data reduction applied), 
+        Unique Capacity (The amount of data that will be freed if the tenants data will be deleted), 
+        and Logical Capacity (The amount of occupied by data written by the user before data reduction applied).        
+      Fields:
+        {{$fields}}
+
+      {{prefer_tables}}
+
+  # VIP Pools command - list VIP pools from VAST cluster(s)
+  vippools:
+    # API endpoints to call (first endpoint is the primary data source)
+    api_endpoints: 
+    - vippools
+
+    # Selected fields for simplified view 
+    fields:
+      # Use the cluster field anchor (reference with <<: *cluster_field)
+      - <<: *cluster_field
+
+      # Use the tenant field anchor (reference with <<: *tenant_field)
+      - <<: *tenant_field 
+
+      - name: name
+        argument:
+          type: str
+          mandatory: false
+          filter: true
+          aliases:
+          - vip_pool_name
+          - vip_pool_names
+
+      - name: role
+    
+      - name: ip addressess
+        field: ranges_summary
+
+      - name: subnet cidr
+        field: subnet_cidr
+      - name: gateway
+        field: gw
+
+      - name: vlan
+    
+      - name: domain name
+        field: domain_name
+    
+      - name: L3
+        field: enable_l3
+        type: bool
+
+      - name: specific cnodes
+        field: cnodes
+        jq: join(",")
+
+    # Command description (used for MCP context)
+    description: |-
+      Use this tool to retrieve a list of vip pools from VAST cluster(s).
+      Args:
+        {{$arguments}}
+      Returns:
+        A list of vip pools. Each item in the list will be a dictionary containing general information regarding a specific vip pool.
+      Fields:
+        {{$fields}}
+
+      {{prefer_tables}}
+
+  # Quotas command - list quotas from VAST cluster(s)
+  quotas:
+    # API endpoints to call (first endpoint is the primary data source)
+    api_endpoints: 
+    - quotas
+
+    # Selected fields for simplified view 
+    fields:
+      # Use the cluster field anchor (reference with <<: *cluster_field)
+      - <<: *cluster_field
+
+      # Use the tenant field anchor (reference with <<: *tenant_field)
+      - <<: *tenant_field 
+
+      - name: path
+        argument:
+          type: str
+          mandatory: false
+          filter: true
+          aliases:
+          - path
+          - paths
+          - path_list
+          - path_names
+
+      - name: state
+        field: pretty_state
+
+      - name: hard limit
+        field: hard_limit
+        convert: AUTO
+
+      - name: soft limit
+        field: soft_limit
+        convert: AUTO
+
+      - name: inodes hard limit
+        field: hard_limit_inodes
+
+      - name: inodes soft limit
+        field: soft_limit_inodes
+
+      - name: grace period
+        field: grace_period
+
+      - name: used capacity
+        field: used_capacity
+        convert: AUTO
+
+      - name: used inodes
+        field: used_inodes
+
+    # Command description (used for MCP context)
+    description: |-
+      Use this tool to retrieve a list of quotas from VAST cluster(s).
+      Args:
+        {{$arguments}}
+      Returns:
+        A list of quotas. Each item in the list will be a dictionary containing general information regarding a specific quota.
+      Fields:
+        {{$fields}}
+
+      {{prefer_tables}}
+  
+  # CNodes command - list cnodes from VAST cluster(s)
+  cnodes:
+
+    # If set to false, the tool will be hidden from the MCP server - will be listed within merged commands only
+    create_mcp_tool: false
+    # API endpoints to call (first endpoint is the primary data source)
+    api_endpoints: 
+    - cnodes
+    - cboxes
+    - eboxes
+
+    # Selected fields for simplified view 
+    fields:
+      # Use the cluster field anchor (reference with <<: *cluster_field)
+      - <<: *cluster_field
+
+      - name: name
+
+      - name: box type
+        field: box_type
+        type: str
+
+      - name: box name
+        field: cboxes.name
+        join_on:
+          field: box_id
+          on_field: id
+        condition:
+          field: box_type
+          operator: "=="
+          value: "cbox"
+
+      - name: box name
+        field: eboxes.name
+        join_on:
+          field: box_id
+          on_field: id
+        condition:
+          field: box_type
+          operator: "=="
+          value: "ebox"
+
+      - name: rack name
+        field: cboxes.rack_name
+        join_on:
+          field: box_id
+          on_field: id
+        argument:
+          type: str
+          mandatory: false
+          filter: true
+          aliases:
+          - cabinet
+          - cabinets
+          - location
+          - locations
+        condition:
+          field: box_type
+          operator: "=="
+          value: "cbox"
+
+      - name: rack name
+        field: eboxes.rack_name
+        join_on:
+          field: box_id
+          on_field: id
+        condition:
+          field: box_type
+          operator: "=="
+          value: "ebox"
+      
+      - name: rack unit
+        field: cboxes.rack_unit
+        join_on:
+          field: box_id
+          on_field: id
+        condition:
+          field: box_type
+          operator: "=="
+          value: "cbox"
+
+      - name: rack unit
+        field: eboxes.rack_unit
+        join_on:
+          field: box_id
+          on_field: id
+        condition:
+          field: box_type
+          operator: "=="
+          value: "ebox"
+
+      - name: serial number
+        field: sn
+        argument:
+          type: str
+          mandatory: false
+          filter: true
+          aliases:
+          - serial_number
+          - sn
+          - system id
+
+      - name: os version
+        field: os_version
+
+      - name: build
+      
+      - name: ip
+        field: ip1
+
+      - name: enabled
+        type: bool
+
+      - name: state
+
+      - name: is mgmt
+        field: is_mgmt
+        type: bool
+
+      - name: is leader
+        field: is_leader
+        type: bool
+      
+    # Command description (used for MCP context)
+    description: |-
+      Use this tool to retrieve a list of cnodes and cboxes from VAST cluster(s).
+      Args:
+        {{$arguments}}
+      Returns:
+        A list of cnodes and cboxes. Each item in the list will be a dictionary containing general information regarding a specific cnode or cbox.
+      Fields:
+        {{$fields}}
+
+      {{prefer_tables}}
+
+  # DNodes command - list dnodes from VAST cluster(s)
+  dnodes:
+
+    # If set to false, the tool will be hidden from the MCP server - will be listed within merged commands only
+    create_mcp_tool: false
+
+    # API endpoints to call (first endpoint is the primary data source)
+    api_endpoints: 
+    - dnodes
+    - dboxes
+    - eboxes
+
+    # Selected fields for simplified view 
+    fields:
+      # Use the cluster field anchor (reference with <<: *cluster_field)
+      - <<: *cluster_field
+
+      - name: name
+
+      - name: box type
+        field: box_type
+
+      - name: box name
+        field: dboxes.name
+        join_on:
+          field: box_id
+          on_field: id
+        condition:
+          field: box_type
+          operator: "=="
+          value: "dbox"
+
+      - name: box name
+        field: eboxes.name
+        join_on:
+          field: box_id
+          on_field: id
+        condition:
+          field: box_type
+          operator: "=="
+          value: "ebox"
+
+      - name: rack name
+        field: dboxes.rack_name
+        join_on:
+          field: box_id
+          on_field: id
+        argument:
+          type: str
+          mandatory: false
+          filter: true
+          aliases:
+          - cabinet
+          - cabinets
+          - location
+          - locations
+        condition:
+          field: box_type
+          operator: "=="
+          value: "dbox"
+
+      - name: rack name
+        field: eboxes.rack_name
+        join_on:
+          field: box_id
+          on_field: id
+        condition:
+          field: box_type
+          operator: "=="
+          value: "ebox"          
+      
+      - name: rack unit
+        field: dboxes.rack_unit
+        join_on:
+          field: box_id
+          on_field: id
+        condition:
+          field: box_type
+          operator: "=="
+          value: "dbox"
+
+      - name: rack unit
+        field: eboxes.rack_unit
+        join_on:
+          field: box_id
+          on_field: id
+        condition:
+          field: box_type
+          operator: "=="
+          value: "ebox"
+
+      - name: serial number
+        field: sn
+        argument:
+          type: str
+          mandatory: false
+          filter: true
+          aliases:
+          - serial_number
+          - sn
+          - system id
+
+      - name: os version
+        field: os_version
+
+      - name: build
+      
+      - name: ip
+        field: ip1
+
+      - name: enabled
+        type: bool
+
+      - name: state
+
+      - name: position
+
+      - name: led status
+        field: led_status
+      
+    # Command description (used for MCP context)
+    description: |-
+      Use this tool to retrieve a list of dnodes and dboxes from VAST cluster(s).
+      Args:
+        {{$arguments}}
+      Returns:
+        A list of dnodes and dboxes. Each item in the list will be a dictionary containing general information regarding a specific dnode or dbox.
+      Fields:
+        {{$fields}}
+
+      {{prefer_tables}}
+
+  alarms:
+    # API endpoints to call (first endpoint is the primary data source)
+    api_endpoints: 
+    - alarms
+
+    # Selected fields for simplified view 
+    fields:
+      - <<: *cluster_field
+      - name: id
+      - name: severity
+        argument:
+          type: str
+          mandatory: false
+          filter: true
+          aliases:
+          - severity
+          - level
+          - status
+          - status_code
+          - severity_code
+          - severity_level
+          - severity_status
+          regex_validation: ^(MINOR|MAJOR|CRITICAL)$
+      - name: type
+        field: event_type
+      - name: message
+        field: alarm_message
+      - name: object type
+        field: object_type
+      - name: object name
+        field: object_name
+      - name: timestamp
+        field: timestamp
+        convert: time_delta
+      - name: last updated
+        field: last_updated
+        convert: time_delta
+      - name: acknowledged
+
+    description: |-
+      Use this tool to retrieve a list of alarms from VAST cluster(s).
+      Args:
+        {{$arguments}}
+      Returns:
+        A list of alarms. Each item in the list will be a dictionary containing general information regarding a specific alarm.
+      Fields:
+        {{$fields}}
+
+      {{prefer_tables}}
+  # Data protection command - list data protection paths from VAST cluster(s)
+  data-protection:   
+    # API endpoints to call (first endpoint is the primary data source)
+    api_endpoints: 
+    - protectedpaths
+
+    # Selected fields for simplified view 
+    fields:
+      - <<: *cluster_field
+      - name: name
+        argument:
+          type: str
+          mandatory: false
+          filter: true
+          aliases:
+          - protection name
+          - data protection name
+      - <<: *tenant_field
+
+
+      - name: path
+        field: source_dir
+        argument:
+          type: str
+          mandatory: false
+          filter: true
+          aliases:
+          - path
+          - source_path
+          - source_path_name
+      - name: peer cluster
+        field: replication_streams
+        jq: .[0].peer_cluster_name
+      - name: target_exported_dir
+        hide: true
+      - name: remote_tenant
+        hide: true
+        jq: .name
+      - name: target tenant:path
+        value: 'f"{remote_tenant}:{target_exported_dir}"'
+
+      - name: role
+        hide: true
+      - name: capabilities
+        hide: true
+      - name: policy
+        field: protection_policy_name
+        argument:
+          type: str
+          mandatory: false
+          filter: true
+          client_side_filter: true
+          aliases:
+          - protection policy
+          - protection policy name
+          - protection policy name
+      - name: state
+      - name: health
+
+
+      - name: protection type
+        value: 'f"local"'
+        condition:
+          field: role
+          operator: "=="
+          value: "Local"
+        argument:
+          type: str
+          mandatory: false
+          filter: true
+          aliases:
+          - type
+          - dp
+          - protection
+          regex_validation: ^(local|async\/.+|sync\/._|global_access\/.+|async_and_global_access\/.+)$
+      - name: protection type
+        value: 'f"async/{lower(role)}"'
+        condition:
+          field: capabilities
+          operator: "=="
+          value: "ASYNC_REPLICATION"
+      - name: protection type
+        value: 'f"sync/{lower(role)}"'
+        condition:
+          field: capabilities
+          operator: "=="
+          value: "SYNC_REPLICATION"     
+      - name: protection type
+        value: 'f"{lower(role)}"'
+        condition:
+          field: role
+          operator: "=="
+          value: "Local"  
+      - name: protection type
+        value: 'f"global_access/{lower(role)}"'
+        condition:
+          field: capabilities
+          operator: "=="
+          value: "STARED_GLOBAL_NAMESPACE" 
+      - name: protection type
+        value: 'f"async_and_global_access/{lower(role)}"'
+        condition:
+          field: capabilities
+          operator: "=="
+          value: "REPLICATION_AND_GN"              
+      # - name: last restore point
+      #   field: last_snapshot_creation_time
+      #   convert: time_delta
+    description: |-
+      Use this tool to retrieve a list of data protection paths from VAST cluster(s).
+      Args:
+        {{$arguments}}
+      Returns:
+        A list of data protection paths. Each item in the list will be a dictionary containing general information regarding a specific data protection path.
+      Fields:
+        {{$fields}}
+
+      {{prefer_tables}}
+
+  # protection policies command - list protection policies from VAST cluster(s)
+  protection-policies:
+    # API endpoints to call (first endpoint is the primary data source)
+    api_endpoints: 
+    - protectionpolicies
+
+    # Selected fields for simplified view 
+    fields:
+      - <<: *cluster_field
+      
+      - name: tenant
+        field: tenant
+        jq: .name
+
+      - name: name
+        field: name
+        argument:
+          type: str
+          mandatory: false
+          filter: true
+          aliases:
+          - protection_policy_name
+      
+      - name: schedule
+        field: pretty_schedules
+      - name: state
+        field: state
+        type: bool
+      - name: local
+        field: is_local
+        type: bool
+    description: |-
+      Use this tool to retrieve a list of protection policies from VAST cluster(s).
+      Args:
+        {{$arguments}}
+      Returns:
+        A list of protection policies. Each item in the list will be a dictionary containing general information regarding a specific protection policy.
+      Fields:
+        {{$fields}}
+      {{prefer_tables}}
+
+  # Snapshot command - list snapshots from VAST cluster(s)
+  snapshots:
+    # API endpoints to call (first endpoint is the primary data source)
+    api_endpoints: 
+    - snapshots
+
+    # Selected fields for simplified view 
+    fields:
+      - <<: *cluster_field
+      - <<: *tenant_field
+      - name: path
+        field: path
+        argument:
+          type: str
+          mandatory: false
+          filter: true
+          aliases:
+          - path
+          - snapshot_path
+          - snapshot_path_name
+      - name: name
+        argument:
+          type: str
+          mandatory: false
+          filter: true
+          aliases:
+          - snap
+          - snapshot_name
+          - backup_name
+          - backup
+      - name: policy
+        field: protection_policy
+        argument:
+          type: str
+          mandatory: false
+          filter: true
+          aliases:
+          - policy
+          - protection_policy
+          - protection_policy_name
+      - name: type
+      - name: unique capacity
+        field: unique_phys_estimation
+        convert: AUTO
+        argument:
+          type: int
+          mandatory: false
+          filter: true
+          aliases:
+          - unique_capacity
+          - snapshot_cpaity
+      - name: indestructible
+        type: bool
+      - name: locked
+        type: bool
+      - name: expiry time
+        field: expiration_time
+        convert: time_delta
+
+    description: |-
+      Use this tool to retrieve a list of snapshots from VAST cluster(s).
+      Args:
+        {{$arguments}}
+      Returns:
+      A list of snapshots. Each item in the list will be a dictionary containing general information regarding a specific snapshot.
+      Fields:
+        {{$fields}}
+
+      {{prefer_tables}}
+
+  # Active directory command - list active directory from VAST cluster(s)
+  active_directory:
+
+    # API endpoints to call (first endpoint is the primary data source)
+    api_endpoints: 
+    - activedirectory
+
+    # Selected fields for simplified view 
+    fields:
+      - <<: *cluster_field
+      - name: name
+        field: title
+      - name: state
+      - name: computer account
+        field: machine_account_name
+      - name: domain
+        field: domain_name
+      - name: ou
+        field: organizational_unit
+      - name: smb
+        field: smb_allowed
+
+    description: |-
+      Use this tool to retrieve a list of active directory from VAST cluster(s).
+      Args:
+        {{$arguments}}
+      Returns:
+        A list of active directory. Each item in the list will be a dictionary containing general information regarding a specific active directory.
+      Fields:
+        {{$fields}}
+  
+  # Local providers command - list local providers from VAST cluster(s)
+  local_providers:
+    # API endpoints to call (first endpoint is the primary data source)
+    api_endpoints: 
+    - localproviders
+
+    # Selected fields for simplified view 
+    fields:
+      - <<: *cluster_field
+      - name: name     
+      - name: description
+      - name: manged by
+        field: managed_by
+        jq: join(",")
+      - name: tenants
+        field: assigned_tenants_preview
+
+    description: |-
+      Use this tool to retrieve a list of local providers from VAST cluster(s).
+      Args:
+        {{$arguments}}
+      Returns:
+        A list of local providers. Each item in the list will be a dictionary containing general information regarding a specific local provider.
+      Fields:
+        {{$fields}}
+      {{prefer_tables}}
+
+  # Identity policies command - list identity policies from VAST cluster(s)
+  identity_policies:
+    # API endpoints to call (first endpoint is the primary data source)
+    api_endpoints: 
+    - s3policies
+
+    # Selected fields for simplified view 
+    fields:
+      - <<: *cluster_field
+      - <<: *tenant_field
+      - name: name
+      - name: enabled
+        type: bool
+      - name: users
+        jq: join(",")
+        argument:
+          type: list
+          mandatory: false
+          filter: true
+          aliases:
+          - users
+          - user_names
+      - name: groups
+        jq: join(",")
+        argument:
+          type: list
+          mandatory: false
+          filter: true
+          aliases:
+          - group
+          - group_names
+          - groups name
+      - name: policy
+        jq: .
+    description: |-
+      Use this tool to retrieve a list of identity policies from VAST cluster(s).
+      Args:
+        {{$arguments}}
+      Returns:
+        A list of identity policies. Each item in the list will be a dictionary containing general information regarding a specific identity policy.
+      Fields:
+        {{$fields}}
+      {{prefer_tables}}
+  
+  # get a list of existing support bundles
+  support_bundles:
+    # API endpoints to call (first endpoint is the primary data source)
+    api_endpoints: 
+    - supportbundles
+
+    # Selected fields for simplified view 
+    fields:
+      - <<: *cluster_field
+      - name: prefix
+      - name: state
+        field: state
+        argument:
+          type: str
+          mandatory: false
+          filter: true
+          aliases:
+          - name
+          - bundle
+          - bundle name
+      - name: size
+        field: bundle_size
+        convert: AUTO
+      - name: state
+      - name: preset
+      - name: start_time
+        hide: true
+      - name: end_time
+        hide: true
+      - name: timeframe
+        value: 'f"{start_time} - {end_time}"'
+    description: |-
+      Use this tool to retrieve a list of support bundles from VAST cluster(s).
+      Args:
+        {{$arguments}}
+      Returns:
+        A list of support bundles. Each item in the list will be a dictionary containing general information regarding a specific support bundle.
+      Fields:
+        {{$fields}}
+      {{prefer_tables}}
+# Merged list commands section
+merged_list_cmds:
+  # Hardware topology command - list hardware topology of cnodes and dnodes from VAST cluster(s) 
+  - name: hardware-topology
+    functions:
+    - cnodes
+    - dnodes
+    description: |-
+      Use this tool to retrieve a list of dnodes and dboxes from VAST cluster(s).
+      Args:
+        {{$arguments}}
+      Returns:
+        A list hardware topology of dnodes and dboxes. Each item in the list will be a dictionary containing general information regarding a specific dnode or cnode.
+      Fields:
+        {{$fields}}
+
+      {{prefer_tables}}
+
+

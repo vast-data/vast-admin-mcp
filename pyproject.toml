@@ -1,0 +1,67 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "vast-admin-mcp"
+dynamic = ["version"]
+description = "VAST Admin MCP Server - MCP server for VAST Data administration tasks"
+readme = "README.md"
+requires-python = ">=3.10"
+license = {text = "MIT"}
+keywords = ["vast", "vast-data", "storage", "mcp", "management"]
+authors = [
+  { name = "Haim Marko", email = "haim.marko@vastdata.com" },
+]
+maintainers = [
+  { name = "Haim Marko", email = "haim.marko@vastdata.com" },
+]
+classifiers = [
+  "Development Status :: 4 - Beta",
+  "Programming Language :: Python",
+  "Programming Language :: Python :: 3.10",
+  "Programming Language :: Python :: 3.11",
+  "Programming Language :: Python :: 3.12",
+  "Programming Language :: Python :: 3.13",
+  "Programming Language :: Python :: Implementation :: CPython",
+  "Programming Language :: Python :: Implementation :: PyPy",
+  "License :: OSI Approved :: MIT License",
+  "Operating System :: OS Independent",
+  "Topic :: System :: Systems Administration",
+  "Topic :: Utilities",
+]
+dependencies = [
+  "vastpy>=0.3.20",
+  "fastmcp>=2.13.0.2",
+  "keyring>=25.0.0",
+  "urllib3>=1.6.0",
+  "keyrings.alt>=5.0.0",
+  "cryptography>=43.0.0",
+  "pyyaml>=6.0.2",
+  "numpy>=2.0.0",
+  "tabulate>=0.9.0",
+  "matplotlib>=3.9.0",
+  "scipy>=1.14.0",
+]
+
+[project.optional-dependencies]
+dev = [
+  "watchdog>=3.0.0",
+]
+
+[project.scripts]
+vast-admin-mcp = "vast_admin_mcp.__main__:main"
+
+[project.urls]
+Documentation = "https://github.com/vast-data/vast-admin-mcp#readme"
+Issues = "https://github.com/vast-data/vast-admin-mcp/issues"
+Source = "https://github.com/vast-data/vast-admin-mcp"
+Repository = "https://github.com/vast-data/vast-admin-mcp"
+
+[tool.hatch.version]
+path = "src/vast_admin_mcp/__about__.py"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/vast_admin_mcp"]
+force-include = { "mcp_list_cmds_template.yaml" = "vast_admin_mcp/mcp_list_cmds_template.yaml" }
+
