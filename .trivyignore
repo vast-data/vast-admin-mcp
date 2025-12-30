@@ -1,0 +1,5 @@
+# Releated to urllib3 version. Will be fixed when upgrading to urllib3==2.6.0
+CVE-2025-66418
+CVE-2025-66471
+CVE-2025-50181
+

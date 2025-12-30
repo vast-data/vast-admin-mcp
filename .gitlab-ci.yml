@@ -1,0 +1,221 @@
+stages:
+  - build
+  - test
+  - security
+  - sync
+  - release
+
+variables:
+  AWS_ACCOUNT_ID: ""
+  DOCKER_REGISTRY: ${AWS_ACCOUNT_ID}.dkr.ecr.eu-west-1.amazonaws.com
+  DOCKER_HUB_IMAGE_NAME: vastdataorg/vast-admin-mcp
+  IMAGE_NAME: ${DOCKER_REGISTRY}/dev/vast-admin-mcp
+  IMAGE_TAG: ci_${CI_COMMIT_SHORT_SHA}
+  IMAGE_FULL_NAME: ${IMAGE_NAME}:${IMAGE_TAG}
+  SOURCE_IMAGE_PREFIX: ${DOCKER_REGISTRY}/docker.io/library/
+  GITHUB_REPO_NAME: vast-data/vast-admin-mcp
+
+build:
+  stage: build
+  before_script:
+    - pip3 install build
+    - sudo dnf install -y make
+  script:
+    - make build
+    - |
+      if [ "$CI_COMMIT_BRANCH" == "main" ]; then
+        make push
+      fi
+  artifacts:
+    paths:
+      - dist/
+    expire_in: 1 hour
+    when: on_success
+  tags:
+    - code-builder-large-shell-azure-rocky96
+
+scan_image [trufflehog]:
+  stage: security
+  before_script:
+    - curl -sSfL https://raw.githubusercontent.com/trufflesecurity/trufflehog/main/scripts/install.sh | sh -s --
+  script:
+    - mkdir -p scan_results
+    - docker pull ${IMAGE_FULL_NAME}
+    - |
+      set -o pipefail
+      ./bin/trufflehog docker \
+      --image=${IMAGE_FULL_NAME} \
+      --results=verified \
+      --fail-on-scan-errors \
+      --fail \
+      --exclude-paths=<(echo ".git/") | tee scan_results/image-trufflehog
+  artifacts:
+    paths:
+      - scan_results/image-trufflehog
+    when: always
+  tags:
+    - devops-runner-linux-large
+
+scan_image [trivy]:
+  stage: security
+  variables:
+    TRIVY_VERSION: "0.68.2"
+  before_script:
+    - curl -sSfL https://raw.githubusercontent.com/aquasecurity/trivy/main/contrib/install.sh | sudo sh -s -- -b /usr/bin v${TRIVY_VERSION}
+  script:
+    - mkdir -p scan_results
+    - docker pull ${IMAGE_FULL_NAME}
+    - |
+      set -o pipefail
+      trivy image ${IMAGE_FULL_NAME} --exit-code 1 --ignore-unfixed | tee scan_results/image-trivy
+  artifacts:
+    paths:
+      - scan_results/image-trivy
+    when: always
+  tags:
+    - devops-runner-linux-large
+
+scan_repo [trufflehog]:
+  stage: security
+  before_script:
+    - curl -sSfL https://raw.githubusercontent.com/trufflesecurity/trufflehog/main/scripts/install.sh | sh -s --
+  script:
+    - mkdir -p scan_results
+    - |
+      set -o pipefail
+      ./bin/trufflehog filesystem . \
+      --results=verified \
+      --fail-on-scan-errors \
+      --fail \
+      --exclude-paths=<(echo ".git/") | tee scan_results/filesystem-trufflehog
+  artifacts:
+    paths:
+      - scan_results/filesystem-trufflehog
+    when: always
+  tags:
+    - devops-runner-linux-large
+
+
+scan_repo [trivy]:
+  stage: security
+  variables:
+    TRIVY_VERSION: "0.68.2"
+  before_script:
+    - curl -sSfL https://raw.githubusercontent.com/aquasecurity/trivy/main/contrib/install.sh | sudo sh -s -- -b /usr/bin v${TRIVY_VERSION}
+  script:
+    - mkdir -p scan_results
+    - |
+      set -o pipefail
+      trivy fs . --exit-code 1 --ignore-unfixed | tee scan_results/filesystem-trivy
+  artifacts:
+    paths:
+      - scan_results/filesystem-trivy
+    when: always
+  tags:
+    - devops-runner-linux-large
+
+sync_github:
+  stage: sync
+  needs:
+    - scan_repo [trufflehog]
+    - scan_repo [trivy]
+    - scan_image [trufflehog]
+    - scan_image [trivy]
+  tags:
+    - code-builder-small-shell-azure
+  when: manual
+  rules:
+    - if: $CI_COMMIT_BRANCH == "main"
+      when: manual
+    - if: '$CI_COMMIT_TAG =~ /^v\d+\.\d+\.\d+$/'
+      when: manual
+  script:
+    - |
+      if [ -n "$CI_COMMIT_TAG" ]; then
+        echo "--- Validating Tag Lineage ---"
+        git fetch origin main
+        # Check if the current commit (the tag) is contained within the 'main' branch
+        if ! git merge-base --is-ancestor HEAD origin/main; then
+          echo "ERROR: Tag $CI_COMMIT_TAG is not on the main branch tree. Aborting sync."
+          exit 1
+        fi
+        echo "Validation successful: Tag is part of the main branch history."
+        REMOTE_REF="refs/tags/${CI_COMMIT_TAG}"
+      else
+        REMOTE_REF="refs/heads/${CI_COMMIT_BRANCH}"
+      fi
+      echo "--- Get token for GitHub ---"
+      GITHUB_JWT_TOKEN=$(docker run --rm \
+        -e GITHUB_CI_BOT_PEM="/github_ci_bot_key.pem" \
+        -v "${GITHUB_CI_BOT_PEM}:/github_ci_bot_key.pem" \
+        ${DOCKER_REGISTRY}/devops/tools:gh-token-generator "$GITHUB_CI_BOT_APP_ID")
+      GITHUB_PUSH_URL="https://x-access-token:${GITHUB_JWT_TOKEN}@github.com/${GITHUB_REPO_NAME}.git"
+      echo "--- Push to GitHub ---"
+      git push ${GITHUB_PUSH_URL} HEAD:${REMOTE_REF}
+
+release [github]:
+  stage: release
+  when: manual
+  rules:
+    - if: '$CI_COMMIT_TAG =~ /^v\d+\.\d+\.\d+$/'
+      when: manual
+  before_script:
+    - sudo dnf install -y gh
+  script:
+    - |
+      echo "--- Get token for GitHub ---"
+      GITHUB_JWT_TOKEN=$(docker run --rm \
+        -e GITHUB_CI_BOT_PEM="/github_ci_bot_key.pem" \
+        -v "${GITHUB_CI_BOT_PEM}:/github_ci_bot_key.pem" \
+        ${DOCKER_REGISTRY}/devops/tools:gh-token-generator "$GITHUB_CI_BOT_APP_ID")
+      gh auth login --with-token <<< "${GITHUB_JWT_TOKEN}"
+      echo "--- Create GitHub Release ---"
+      gh release create ${CI_COMMIT_TAG} \
+        --repo ${GITHUB_REPO_NAME} \
+        --title "Release ${CI_COMMIT_TAG}" \
+        --notes "Release ${CI_COMMIT_TAG}" \
+        dist/vast_admin_mcp-${CI_COMMIT_TAG##v}*
+  needs:
+    - sync_github
+    - job: build
+      artifacts: true
+  tags:
+    - code-builder-large-shell-azure-rocky96
+
+release [pypi]:
+  stage: release
+  before_script:
+    - pip install --upgrade twine
+  script:
+    - twine upload dist/vast_admin_mcp-${CI_COMMIT_TAG##v}*
+  rules:
+    - if: '$CI_COMMIT_TAG =~ /^v\d+\.\d+\.\d+$/'
+      when: manual
+  needs:
+    - sync_github
+    - job: build
+      artifacts: true
+  when: manual
+  tags:
+    - code-builder-large-shell-azure-rocky96
+
+release [dockerhub]:
+  stage: release
+  before_script:
+    - sudo dnf install -y skopeo
+  variables:
+    SKOPEO_OPTS: ""
+  script: |
+    skopeo copy \
+      --dest-username=${DOCKER_USER} \
+      --dest-password=${DOCKER_PASSWORD} \
+      ${SKOPEO_OPTS} \
+      docker://${IMAGE_FULL_NAME} \
+      docker://${DOCKER_HUB_IMAGE_NAME}:${CI_COMMIT_TAG##v}
+  rules:
+    - if: '$CI_COMMIT_TAG =~ /^v\d+\.\d+\.\d+$/'
+      when: manual
+  needs:
+    - sync_github
+  tags:
+    - code-builder-large-shell-azure-rocky96
