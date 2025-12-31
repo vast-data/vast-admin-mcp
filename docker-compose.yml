@@ -17,7 +17,7 @@ services:
       context: .
       dockerfile: Dockerfile
       args:
-        VERSION: ${VERSION:-0.1.1}
+        VERSION: ${VERSION:-0.1.2}
         BUILD_DATE: ${BUILD_DATE}
         VCS_REF: ${VCS_REF}
     image: vast-admin-mcp:${VERSION:-latest}
@@ -40,7 +40,7 @@ services:
       - DOCKER_CONTAINER_NAME=vast-admin-mcp
       - DOCKER_IMAGE=vast-admin-mcp:${VERSION:-latest}
       - HOST_CONFIG_DIR=${HOME}/.vast-admin-mcp
-      - VAST_ADMIN_MCP_VERSION=${VERSION:-0.1.1}
+      - VAST_ADMIN_MCP_VERSION=${VERSION:-0.1.2}
       - FORCE_ENCRYPTED_STORAGE=true
     # Keep container running (useful for docker exec)
     command: tail -f /dev/null

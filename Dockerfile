@@ -5,7 +5,7 @@ ARG SOURCE_IMAGE_PREFIX=""
 FROM ${SOURCE_IMAGE_PREFIX}python:3.13-slim
 
 # Build arguments for versioning
-ARG VERSION=0.1.1
+ARG VERSION=0.1.2
 ARG BUILD_DATE
 ARG VCS_REF
 
@@ -29,15 +29,11 @@ RUN apt-get update && \
 # Set working directory
 WORKDIR /app
 
-# Copy project files
-COPY pyproject.toml ./
-COPY README.md ./
-COPY src/ ./src/
 COPY mcp_list_cmds_template.yaml ./
 
 # Install the package
-RUN pip install --no-cache-dir --upgrade pip && \
-    pip install --no-cache-dir .
+RUN --mount=type=bind,source=dist,target=/tmp/dist \
+    pip install --no-cache-dir /tmp/dist/*.whl
 
 # Create directory for user config (will be mounted from host)
 # This directory contains:

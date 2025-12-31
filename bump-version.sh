@@ -23,7 +23,7 @@ if [ $# -eq 0 ]; then
 fi
 
 # Get current version
-CURRENT_VERSION=$(grep -E '^__version__\s*=\s*"[^"]+"' "$ABOUT_FILE" | sed 's/__version__\s*=\s*"\([^"]*\)"/\1/')
+CURRENT_VERSION=$(grep -E '^__version__' "$ABOUT_FILE" | grep -oE '"[^"]+"' | tr -d '"')
 
 echo "Current version: ${CURRENT_VERSION}"
 

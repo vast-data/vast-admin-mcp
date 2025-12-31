@@ -19,7 +19,7 @@ IMAGE_TAG ?= $(VERSION)
 all: build
 
 ## build: Build the Docker image with version tags
-build-docker:
+build-docker: build-python
 	@echo "=================================================="
 	@echo "Building VAST Admin MCP Docker Image"
 	@echo "=================================================="
@@ -28,7 +28,7 @@ build-docker:
 	@echo "Build Date: $(BUILD_DATE)"
 	@echo "Image Name: $(IMAGE_NAME)"
 	@echo "=================================================="
-	docker build \
+	DOCKER_BUILDKIT=1 docker build \
 		--build-arg VERSION="$(VERSION)" \
 		--build-arg BUILD_DATE="$(BUILD_DATE)" \
 		--build-arg VCS_REF="$(VCS_REF)" \
