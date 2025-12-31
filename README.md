@@ -3,7 +3,7 @@
 [![PyPI Version](https://img.shields.io/pypi/v/vast-admin-mcp?color=blue&label=PyPI)](https://pypi.org/project/vast-admin-mcp/)
 [![Python Version](https://img.shields.io/pypi/pyversions/vast-admin-mcp)](https://pypi.org/project/vast-admin-mcp/)
 [![Docker Image](https://img.shields.io/badge/docker-latest-blue)](https://github.com/vast-data/vast-admin-mcp)
-[![License](https://img.shields.io/badge/license-MIT-green)](LICENSE)
+[![License](https://img.shields.io/badge/license-Apache-green)](LICENSE)
 
 VAST Admin MCP Server is a Model Context Protocol (MCP) server for VAST Data administration tasks. It provides AI assistants with tools to interact with VAST clusters for monitoring, listing, and management operations. It is supported both for Cluster and Tenant admins.
 
@@ -128,7 +128,7 @@ Refresh a clone from most recent snapshot of view /data/app1 at path /data/app1-
 
 ### Prerequisites
 
-- **Python 3.8+**
+- **Python 3.10+**
 - **jq**: Command-line JSON processor (required for field transformations in YAML templates)
 
 #### Installing jq
