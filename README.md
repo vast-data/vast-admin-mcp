@@ -220,8 +220,8 @@ docker run --rm -it \
 #### Option 3: Using docker-compose
 
 ```bash
-# Optional: Set version (defaults to 0.1.1)
-export VERSION=0.1.1
+# Optional: Set version (defaults to 0.1.2)
+export VERSION=0.1.2
 
 # Start container in background
 docker-compose up -d
@@ -502,6 +502,10 @@ The server includes create functions for creating VAST objects. These functions 
 **Important**: Create functions require the MCP server to be started with `--read-write` flag. If called in read-only mode, the LLM user will be notified that read-write mode is required.
 
 **Security**: All create functions use API whitelisting to ensure only allowed endpoints and HTTP methods can be accessed. See [API Whitelist](#api-whitelist) section for details.
+
+## Community & Support
+
+VAST Admin MCP Server welcomes questions, feedback, and feature requests. Join the conversation on https://community.vastdata.com/
 
 ## License
 

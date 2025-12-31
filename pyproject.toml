@@ -6,9 +6,9 @@ build-backend = "hatchling.build"
 name = "vast-admin-mcp"
 dynamic = ["version"]
 description = "VAST Admin MCP Server - MCP server for VAST Data administration tasks"
-readme = "README.md"
+readme = "README.pypi.md"
 requires-python = ">=3.10"
-license = {text = "MIT"}
+license = {text = "Apache License 2.0"}
 keywords = ["vast", "vast-data", "storage", "mcp", "management"]
 authors = [
   { name = "Haim Marko", email = "haim.marko@vastdata.com" },
@@ -17,7 +17,7 @@ maintainers = [
   { name = "Haim Marko", email = "haim.marko@vastdata.com" },
 ]
 classifiers = [
-  "Development Status :: 4 - Beta",
+  "Development Status :: 5 - Production/Stable",
   "Programming Language :: Python",
   "Programming Language :: Python :: 3.10",
   "Programming Language :: Python :: 3.11",
@@ -26,7 +26,8 @@ classifiers = [
   "Programming Language :: Python :: Implementation :: CPython",
   "Programming Language :: Python :: Implementation :: PyPy",
   "License :: OSI Approved :: MIT License",
-  "Operating System :: OS Independent",
+  "Operating System :: MacOS",
+  "Operating System :: POSIX :: Linux",
   "Topic :: System :: Systems Administration",
   "Topic :: Utilities",
 ]

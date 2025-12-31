@@ -22,10 +22,7 @@ build:
     - sudo dnf install -y make
   script:
     - make build
-    - |
-      if [ "$CI_COMMIT_BRANCH" == "main" ]; then
-        make push
-      fi
+    - make push
   artifacts:
     paths:
       - dist/
