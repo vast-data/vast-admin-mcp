@@ -220,8 +220,8 @@ docker run --rm -it \
 #### Option 3: Using docker-compose
 
 ```bash
-# Optional: Set version (defaults to 0.1.2)
-export VERSION=0.1.2
+# Optional: Set version (defaults to 0.1.3)
+export VERSION=0.1.3
 
 # Start container in background
 docker-compose up -d
