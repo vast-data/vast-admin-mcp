@@ -5,7 +5,7 @@ ARG SOURCE_IMAGE_PREFIX=""
 FROM ${SOURCE_IMAGE_PREFIX}python:3.13-slim
 
 # Build arguments for versioning
-ARG VERSION=0.1.3
+ARG VERSION=0.1.4
 ARG BUILD_DATE
 ARG VCS_REF
 
