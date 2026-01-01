@@ -854,19 +854,32 @@ def parse_order_spec(order_spec: str, field_mappings: Optional[Dict[str, str]] =
     field = None
     direction_str = None
     
+    # Check for minus prefix (undocumented feature for descending sort)
+    # Supports common API pattern like "-field_name" meaning descending
+    order_spec_stripped = order_spec.strip()
+    prefix_descending = False
+    if order_spec_stripped.startswith('-'):
+        prefix_descending = True
+        order_spec_stripped = order_spec_stripped[1:].strip()  # Remove minus and re-strip
+    
+    # If minus prefix was used, treat entire remaining string as field name (no separators)
+    # This avoids ambiguity with field names containing spaces
+    if prefix_descending:
+        field = order_spec_stripped
+        direction_str = 'desc'
     # Try colon format first: "field:direction"
-    if ':' in order_spec:
-        parts = order_spec.split(':', 1)
+    elif ':' in order_spec_stripped:
+        parts = order_spec_stripped.split(':', 1)
         field = parts[0].strip()
         direction_str = parts[1].strip().lower() if len(parts) > 1 else None
     # Try space format: "field direction"
-    elif ' ' in order_spec:
-        parts = order_spec.strip().split(None, 1)  # Split on first space only
+    elif ' ' in order_spec_stripped:
+        parts = order_spec_stripped.strip().split(None, 1)  # Split on first space only
         field = parts[0].strip()
         direction_str = parts[1].strip().lower() if len(parts) > 1 else None
     else:
         # No separator - treat entire string as field name
-        field = order_spec.strip()
+        field = order_spec_stripped.strip()
         direction_str = None
     
     if not field:

@@ -2663,6 +2663,20 @@ def _generate_mcp_debug_code(command_name: str, template_parser: TemplateParser)
     args_config = template_parser.get_arguments(command_name)
     description = template_parser.get_description(command_name)
     
+    # Add order and top arguments (same as in mcp_server.py)
+    args_config.append({
+        'name': 'order',
+        'type': 'str',
+        'mandatory': False,
+        'description': 'Sort results by field. Format: "field_name:direction" using colon separator. IMPORTANT: Use underscores for field names (e.g., "logical_used" not "logical used"). Examples: "physical_used:desc", "logical_used:asc", "name:desc". Direction: Use a/as/asc/ascending for ascending, or d/de/desc/descending for descending. Default is asc if omitted. Multiple fields: "field1:desc,field2:asc".'
+    })
+    args_config.append({
+        'name': 'top',
+        'type': 'int',
+        'mandatory': False,
+        'description': 'Limit output to top N results'
+    })
+    
     # Build parameter definitions
     param_defs = []
     param_names = []
@@ -2710,10 +2724,24 @@ def _generate_mcp_debug_code(command_name: str, template_parser: TemplateParser)
     
     # Build docstring from description
     if 'Args:' in description or 'Arguments:' in description:
+        # Description already has Args section - need to append order and top descriptions
+        order_arg = [arg for arg in args_config if arg.get('name') == 'order']
+        top_arg = [arg for arg in args_config if arg.get('name') == 'top']
+        
+        order_top_lines = []
+        if order_arg:
+            order_desc = order_arg[0].get('description', '')
+            order_top_lines.append(f"        order (str) (optional): {order_desc} Defaults to empty string.")
+        if top_arg:
+            top_desc = top_arg[0].get('description', '')
+            order_top_lines.append(f"        top (int) (optional): {top_desc} Defaults to 0.")
+        
         if 'Returns:' not in description:
-            docstring = description + "\n\n        Returns:\n            A list of dictionaries containing the requested information."
+            docstring = description + "\n" + "\n".join(order_top_lines) + "\n\n        Returns:\n            A list of dictionaries containing the requested information."
         else:
-            docstring = description
+            # Insert order/top before Returns section
+            parts = description.rsplit('Returns:', 1)
+            docstring = parts[0] + "\n".join(order_top_lines) + "\n        Returns:" + parts[1]
     else:
         # Build docstring with Args section
         docstring_parts = [description, "\n        Args:"]
@@ -2818,6 +2846,20 @@ def _generate_merged_mcp_code(merged_name: str, template_parser: TemplateParser)
     args_config = template_parser.get_merged_arguments(merged_name)
     description = template_parser.get_description(merged_name)
     
+    # Add order and top arguments (same as in mcp_server.py)
+    args_config.append({
+        'name': 'order',
+        'type': 'str',
+        'mandatory': False,
+        'description': 'Sort results by field. Format: "field_name:direction" using colon separator. IMPORTANT: Use underscores for field names (e.g., "logical_used" not "logical used"). Examples: "physical_used:desc", "logical_used:asc", "name:desc". Direction: Use a/as/asc/ascending for ascending, or d/de/desc/descending for descending. Default is asc if omitted. Multiple fields: "field1:desc,field2:asc".'
+    })
+    args_config.append({
+        'name': 'top',
+        'type': 'int',
+        'mandatory': False,
+        'description': 'Limit output to top N results'
+    })
+    
     # Build parameter definitions
     param_defs = []
     param_names = []
@@ -2865,10 +2907,24 @@ def _generate_merged_mcp_code(merged_name: str, template_parser: TemplateParser)
     
     # Build docstring from description
     if 'Args:' in description or 'Arguments:' in description:
+        # Description already has Args section - need to append order and top descriptions
+        order_arg = [arg for arg in args_config if arg.get('name') == 'order']
+        top_arg = [arg for arg in args_config if arg.get('name') == 'top']
+        
+        order_top_lines = []
+        if order_arg:
+            order_desc = order_arg[0].get('description', '')
+            order_top_lines.append(f"        order (str) (optional): {order_desc} Defaults to empty string.")
+        if top_arg:
+            top_desc = top_arg[0].get('description', '')
+            order_top_lines.append(f"        top (int) (optional): {top_desc} Defaults to 0.")
+        
         if 'Returns:' not in description:
-            docstring = description + "\n\n        Returns:\n            A list of dictionaries containing the requested information."
+            docstring = description + "\n" + "\n".join(order_top_lines) + "\n\n        Returns:\n            A list of dictionaries containing the requested information."
         else:
-            docstring = description
+            # Insert order/top before Returns section
+            parts = description.rsplit('Returns:', 1)
+            docstring = parts[0] + "\n".join(order_top_lines) + "\n        Returns:" + parts[1]
     else:
         # Build docstring with Args section
         docstring_parts = [description, "\n        Args:"]

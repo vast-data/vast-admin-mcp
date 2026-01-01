@@ -7,7 +7,7 @@
 
 VAST Admin MCP Server is a Model Context Protocol (MCP) server for VAST Data administration tasks. It provides AI assistants with tools to interact with VAST clusters for monitoring, listing, and management operations. It is supported both for Cluster and Tenant admins.
 
-<img src="static/vast-admin-mcp-fast.gif" alt="VAST Admin MCP Demo" width="70%">
+<img src="static/vast-admin-mcp-fast.gif" alt="VAST Admin MCP Demo" width="85%">
 
 ## Features
 
@@ -148,11 +148,6 @@ sudo apt-get install jq
 sudo yum install jq
 ```
 
-**Windows:**
-Download from [jq releases](https://github.com/jqlang/jq/releases) or use package managers like Chocolatey:
-```bash
-choco install jq
-```
 
 ### Basic Installation
 
@@ -221,7 +216,7 @@ docker run --rm -it \
 
 ```bash
 # Optional: Set version (defaults to 0.1.3)
-export VERSION=0.1.3
+export VERSION=0.1.4
 
 # Start container in background
 docker-compose up -d

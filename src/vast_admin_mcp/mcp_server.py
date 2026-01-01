@@ -418,7 +418,7 @@ def start_mcp(read_write: bool = False):
                         'name': 'order',
                         'type': 'str',
                         'mandatory': False,
-                        'description': 'Sort results by field. Format: "field:direction" or "field direction" (colon or space separator). Examples: "physical_used:desc", "logical_used asc", "name:a" (ascending), "name:dece" (descending). Direction supports prefixes: a/as/asc/ascending for ascending, d/de/dec/desc/dece/descending for descending. Default direction is asc if omitted. Can specify multiple: "field1:dec,field2:asc".'
+                        'description': 'Sort results by field. Format: "field_name:direction" using colon separator. IMPORTANT: Use underscores for field names (e.g., "logical_used" not "logical used"). Examples: "physical_used:desc", "logical_used:asc", "name:desc". Direction: Use a/as/asc/ascending for ascending, or d/de/desc/descending for descending. Default is asc if omitted. Multiple fields: "field1:desc,field2:asc".'
                     })
                     args_config.append({
                         'name': 'top',
@@ -484,11 +484,24 @@ def start_mcp(read_write: bool = False):
                     # The description already includes arguments if {{arguments}} was in the template
                     # So we just use it as-is, or build it if it doesn't have arguments
                     if 'Args:' in description or 'Arguments:' in description:
-                        # Description already has arguments, just add Returns section if missing
+                        # Description already has arguments - need to append order and top descriptions
+                        order_arg = [arg for arg in args_config if arg.get('name') == 'order']
+                        top_arg = [arg for arg in args_config if arg.get('name') == 'top']
+                        
+                        order_top_lines = []
+                        if order_arg:
+                            order_desc = order_arg[0].get('description', '')
+                            order_top_lines.append(f"        order (str) (optional): {order_desc} Defaults to empty string.")
+                        if top_arg:
+                            top_desc = top_arg[0].get('description', '')
+                            order_top_lines.append(f"        top (int) (optional): {top_desc} Defaults to 0.")
+                        
                         if 'Returns:' not in description:
-                            docstring = description + "\n        Returns:\n            A list of dictionaries containing the requested information."
+                            docstring = description + "\n" + "\n".join(order_top_lines) + "\n\n        Returns:\n            A list of dictionaries containing the requested information."
                         else:
-                            docstring = description
+                            # Insert order/top before Returns section
+                            parts = description.rsplit('Returns:', 1)
+                            docstring = parts[0] + "\n".join(order_top_lines) + "\n        Returns:" + parts[1]
                     else:
                         # Description doesn't have arguments, build full docstring
                         docstring_parts = [description, "\n        Args:"]
@@ -700,7 +713,7 @@ def start_mcp(read_write: bool = False):
                     'name': 'order',
                     'type': 'str',
                     'mandatory': False,
-                    'description': 'Sort results by field. Format: "field:direction" or "field direction" (colon or space separator). Examples: "physical_used:desc", "logical_used asc", "name:a" (ascending), "name:dece" (descending). Direction supports prefixes: a/as/asc/ascending for ascending, d/de/dec/desc/dece/descending for descending. Default direction is asc if omitted. Can specify multiple: "field1:dec,field2:asc".'
+                    'description': 'Sort results by field. Format: "field_name:direction" using colon separator. IMPORTANT: Use underscores for field names (e.g., "logical_used" not "logical used"). Examples: "physical_used:desc", "logical_used:asc", "name:desc". Direction: Use a/as/asc/ascending for ascending, or d/de/desc/descending for descending. Default is asc if omitted. Multiple fields: "field1:desc,field2:asc".'
                 })
                 args_config.append({
                     'name': 'top',
@@ -752,10 +765,24 @@ def start_mcp(read_write: bool = False):
                 
                 # Build docstring
                 if 'Args:' in description or 'Arguments:' in description:
+                    # Description already has arguments - need to append order and top descriptions
+                    order_arg = [arg for arg in args_config if arg.get('name') == 'order']
+                    top_arg = [arg for arg in args_config if arg.get('name') == 'top']
+                    
+                    order_top_lines = []
+                    if order_arg:
+                        order_desc = order_arg[0].get('description', '')
+                        order_top_lines.append(f"        order (str) (optional): {order_desc} Defaults to empty string.")
+                    if top_arg:
+                        top_desc = top_arg[0].get('description', '')
+                        order_top_lines.append(f"        top (int) (optional): {top_desc} Defaults to 0.")
+                    
                     if 'Returns:' not in description:
-                        docstring = description + "\n        Returns:\n            A list of dictionaries containing the requested information."
+                        docstring = description + "\n" + "\n".join(order_top_lines) + "\n\n        Returns:\n            A list of dictionaries containing the requested information."
                     else:
-                        docstring = description
+                        # Insert order/top before Returns section
+                        parts = description.rsplit('Returns:', 1)
+                        docstring = parts[0] + "\n".join(order_top_lines) + "\n        Returns:" + parts[1]
                 else:
                     docstring_parts = [description, "\n        Args:"]
                     for arg in args_config:

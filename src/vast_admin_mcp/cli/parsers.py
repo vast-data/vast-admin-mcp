@@ -42,7 +42,7 @@ def create_list_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         '--order',
         type=str,
-        help='Sort results by field. Format: "field:direction" or "field direction". Examples: "physical_used:desc", "logical_used asc", "name:a" (asc), "name:dece" (desc). Direction supports prefixes: a/as/asc/ascending or d/de/dec/desc/dece/descending. Default: asc if omitted. Multiple: "field1:dec,field2:asc"'
+        help='Sort results by field. Format: "field_name:direction" using colon separator. Use underscores for field names (e.g., "logical_used" not "logical used"). Examples: "physical_used:desc", "logical_used:asc", "name:desc". Direction: a/as/asc/ascending or d/de/desc/descending. Default: asc. Multiple: "field1:desc,field2:asc"'
     )
     
     parser.add_argument(
