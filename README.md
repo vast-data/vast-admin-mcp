@@ -7,7 +7,7 @@
 
 VAST Admin MCP Server is a Model Context Protocol (MCP) server for VAST Data administration tasks. It provides AI assistants with tools to interact with VAST clusters for monitoring, listing, and management operations. It is supported both for Cluster and Tenant admins.
 
-<img src="static/vast-admin-mcp-fast.gif" alt="VAST Admin MCP Demo" width="85%">
+<img src="static/vast-admin-mcp-fast.gif" alt="VAST Admin MCP Demo" width="90%">
 
 ## Features
 
@@ -60,17 +60,7 @@ vast-admin-mcp mcpsetup vscode
 📋 VSCode Configuration Instructions
    Config file location: /Users/user/.vscode/mcp.json
 
-   Add the following to the 'servers' section:
-    {
-        "VAST Admin MCP": {
-            "command": "vast-admin-mcp",
-            "args": [
-                "mcp"
-            ]
-        }
-    }
-
-   If the file does not exist, create it with this structure:
+    Create a new file if not exists, or add the VAST Admin MCP entry to the existing 'servers' section:
     {
         "servers": {
             "VAST Admin MCP": {
@@ -216,7 +206,7 @@ docker run --rm -it \
 
 ```bash
 # Optional: Set version (defaults to 0.1.3)
-export VERSION=0.1.4
+export VERSION=0.1.5
 
 # Start container in background
 docker-compose up -d
