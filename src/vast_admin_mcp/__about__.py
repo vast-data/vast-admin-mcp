@@ -1,5 +1,5 @@
 # SPDX-FileCopyrightText: 2025-present Haim Marko <haim.marko@vastdata.com>
 #
 # SPDX-License-Identifier: MIT
-__version__ = "0.1.4"
+__version__ = "0.1.5"
 

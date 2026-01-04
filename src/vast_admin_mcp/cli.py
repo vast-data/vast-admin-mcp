@@ -1118,7 +1118,7 @@ def _get_mcp_tool_config(tool_name: str) -> Dict[str, str]:
     """Get MCP tool configuration (config path, section name, tool display name).
     
     Args:
-        tool_name: Name of the tool ('cursor', 'claude-desktop', 'windsurf', 'vscode')
+        tool_name: Name of the tool ('cursor', 'claude-desktop', 'windsurf', 'vscode', 'gemini-cli')
         
     Returns:
         Dictionary with 'config_path', 'section_name', 'tool_display_name', and 'restart_instruction'
@@ -1152,6 +1152,12 @@ def _get_mcp_tool_config(tool_name: str) -> Dict[str, str]:
             'section_name': 'servers',
             'tool_display_name': 'VSCode',
             'restart_instruction': 'Restart VSCode'
+        },
+        'gemini-cli': {
+            'config_path': os.path.expanduser('~/.gemini/settings.json'),
+            'section_name': 'mcpServers',
+            'tool_display_name': 'Gemini CLI',
+            'restart_instruction': 'Restart Gemini CLI or reload the configuration'
         }
     }
     
@@ -1180,7 +1186,7 @@ def _configure_mcp_tool(tool_name: str, command_base: str, args: list[str]) -> N
     This unified function replaces the four separate _configure_* functions.
     
     Args:
-        tool_name: Name of the tool ('cursor', 'claude-desktop', 'windsurf', 'vscode')
+        tool_name: Name of the tool ('cursor', 'claude-desktop', 'windsurf', 'vscode', 'gemini-cli')
         command_base: Base command to run the MCP server
         args: Arguments to pass to the MCP server command
     """
@@ -1201,20 +1207,21 @@ def _configure_mcp_tool(tool_name: str, command_base: str, args: list[str]) -> N
         }
     }
     
+    # Generate full file structure
+    full_config = {section_name: new_config_entry}
+    
     print(f"📋 {tool_display_name} Configuration Instructions")
     print(f"   Config file location: {config_path}")
     print()
-    print(f"   Add the following to the '{section_name}' section:")
-    print(json.dumps(new_config_entry, indent=4))
-    print()
-    print("   If the file doesn't exist, create it with this structure:")
-    print(json.dumps({section_name: new_config_entry}, indent=4))
+    print(f"   Create a new file if not exists, or add the VAST Admin MCP entry to the existing '{section_name}' section:")
+    print(json.dumps(full_config, indent=2))
     print()
     print("📝 Next steps:")
-    print(f"   1. Edit or create the config file at the location shown above")
-    print(f"   2. {restart_instruction}")
-    print(f"   3. The MCP server should be available in {tool_display_name}'s MCP tools")
-    print(f"   4. Test by asking {tool_display_name} to list VAST clusters")
+    print(f"   1. Create or edit the config file at: {config_path}")
+    print(f"   2. If the file exists, merge the 'VAST Admin MCP' entry into the existing '{section_name}' section")
+    print(f"   3. {restart_instruction}")
+    print(f"   4. The MCP server should be available in {tool_display_name}'s MCP tools")
+    print(f"   5. Test by asking {tool_display_name} to list VAST clusters")
 
 
 def _parse_type_annotation(param) -> str:
@@ -1751,7 +1758,7 @@ def main():
     mcpsetup_parser = subparsers.add_parser('mcpsetup', help='Configure MCP server for desktop LLM applications')
     mcpsetup_parser.add_argument(
         'tool',
-        choices=['cursor', 'claude-desktop', 'windsurf', 'vscode'],
+        choices=['cursor', 'claude-desktop', 'windsurf', 'vscode', 'gemini-cli'],
         help='Desktop LLM application to configure'
     )
     mcpsetup_parser.add_argument(
