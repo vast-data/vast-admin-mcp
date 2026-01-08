@@ -408,18 +408,74 @@ The following create tools are available when the MCP server is started with `--
 
 ### Environment Variables
 
+#### Template File Paths
+
 Template file paths can be overridden using environment variables:
+
 - `VAST_ADMIN_MCP_DEFAULT_TEMPLATE_FILE`: Override default template file path
 - `VAST_ADMIN_MCP_TEMPLATE_MODIFICATIONS_FILE`: Override template modifications file path
 - `VAST_ADMIN_MCP_VIEW_TEMPLATE_FILE`: Override view templates file path
 
 Example:
+
 ```bash
 export VAST_ADMIN_MCP_DEFAULT_TEMPLATE_FILE=/custom/path/default_template.yaml
 export VAST_ADMIN_MCP_TEMPLATE_MODIFICATIONS_FILE=/custom/path/modifications.yaml
 export VAST_ADMIN_MCP_VIEW_TEMPLATE_FILE=/custom/path/view_templates.json
 vast-admin-mcp list views
 ```
+
+#### Proxy Configuration
+
+The server supports HTTP/HTTPS and SOCKS proxies via standard environment variables:
+
+- `HTTPS_PROXY` or `https_proxy`: For HTTP/HTTPS proxies (highest precedence)
+- `HTTP_PROXY` or `http_proxy`: For HTTP/HTTPS proxies (fallback)
+- `ALL_PROXY` or `all_proxy`: For all proxy types including SOCKS (recommended for SOCKS proxies)
+
+**HTTP/HTTPS Proxy Examples:**
+
+```bash
+# Basic HTTP proxy
+export HTTPS_PROXY=http://proxy.example.com:8080
+
+# Proxy with authentication
+export HTTPS_PROXY=http://username:password@proxy.example.com:8080
+
+# Then run commands as normal
+vast-admin-mcp clusters
+vast-admin-mcp list views --cluster cluster1
+```
+
+**SOCKS Proxy Support:**
+
+SOCKS proxies (SOCKS4, SOCKS5, SOCKS5h) are supported but require the `PySocks` library:
+
+```bash
+# Install PySocks for SOCKS proxy support
+pip install pysocks
+
+# SOCKS5 proxy (client-side DNS resolution)
+export ALL_PROXY=socks5://proxy.example.com:1080
+
+# SOCKS5h proxy (remote DNS resolution - recommended)
+export ALL_PROXY=socks5h://proxy.example.com:1080
+
+# SOCKS5 with authentication
+export ALL_PROXY=socks5h://username:password@proxy.example.com:1080
+
+# SOCKS4 proxy
+export ALL_PROXY=socks4://proxy.example.com:1080
+```
+
+**Proxy Types:**
+
+- **HTTP/HTTPS**: Standard corporate proxies (built-in support) - use `HTTPS_PROXY` or `HTTP_PROXY`
+- **SOCKS5**: Standard SOCKS5 with client-side DNS (requires PySocks) - use `ALL_PROXY`
+- **SOCKS5h**: SOCKS5 with remote DNS resolution - recommended for privacy (requires PySocks) - use `ALL_PROXY`
+- **SOCKS4**: Legacy SOCKS4 protocol (requires PySocks) - use `ALL_PROXY`
+
+**Note**: While any proxy variable will work with any proxy type, using `ALL_PROXY` for SOCKS proxies follows standard conventions and makes your configuration clearer.
 
 ## API Whitelist
 
