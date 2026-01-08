@@ -3,6 +3,7 @@
 import time
 import functools
 import logging
+import os
 from typing import Dict, Any, Optional, List
 import urllib3
 
@@ -41,21 +42,48 @@ def _patch_vast_client_request():
             read=API_READ_TIMEOUT
         )
         
-        # Create PoolManager with our configuration
+        # Check for proxy configuration in environment variables
+        # HTTPS_PROXY takes precedence since VAST API uses HTTPS
+        proxy_url = os.environ.get('HTTPS_PROXY') or os.environ.get('https_proxy') or \
+                    os.environ.get('HTTP_PROXY') or os.environ.get('http_proxy') or \
+                    os.environ.get('ALL_PROXY') or os.environ.get('all_proxy')
+        
+        # Create PoolManager or ProxyManager based on proxy configuration
+        manager_kwargs = {
+            'retries': retry_config,
+            'timeout': timeout_config
+        }
+        
         if self._cert_file:
-            pm = urllib3.PoolManager(
-                ca_certs=self._cert_file,
-                server_hostname=self._cert_server_name,
-                retries=retry_config,
-                timeout=timeout_config
-            )
+            manager_kwargs['ca_certs'] = self._cert_file
+            manager_kwargs['server_hostname'] = self._cert_server_name
         else:
-            pm = urllib3.PoolManager(
-                cert_reqs='CERT_NONE',
-                retries=retry_config,
-                timeout=timeout_config
-            )
+            manager_kwargs['cert_reqs'] = 'CERT_NONE'
             urllib3.disable_warnings(category=urllib3.exceptions.InsecureRequestWarning)
+        
+        # Use ProxyManager or SOCKSProxyManager if proxy is configured, otherwise use PoolManager
+        if proxy_url:
+            logging.debug(f"Using proxy: {proxy_url}")
+            # Check if this is a SOCKS proxy
+            if proxy_url.lower().startswith(('socks5://', 'socks5h://', 'socks4://', 'socks4a://')):
+                try:
+                    from urllib3.contrib.socks import SOCKSProxyManager
+                    pm = SOCKSProxyManager(proxy_url, **manager_kwargs)
+                    logging.debug(f"Using SOCKSProxyManager for {proxy_url.split('://')[0]} proxy")
+                except ImportError:
+                    logging.error(
+                        "SOCKS proxy support requires the 'PySocks' library. "
+                        "Install it with: pip install pysocks"
+                    )
+                    raise ImportError(
+                        "SOCKS proxy configured but PySocks library not installed. "
+                        "Install with: pip install pysocks"
+                    )
+            else:
+                # HTTP/HTTPS proxy
+                pm = urllib3.ProxyManager(proxy_url, **manager_kwargs)
+        else:
+            pm = urllib3.PoolManager(**manager_kwargs)
         
         # Rest of the request logic (copied from VASTClient.request)
         if self._token:
