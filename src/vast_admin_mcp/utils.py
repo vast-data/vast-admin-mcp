@@ -1263,6 +1263,47 @@ from .cache import get_cache_manager
 
 _cache_manager = get_cache_manager()
 
+
+def is_vast_version_legacy(version_string: str, threshold: tuple = (5, 3)) -> bool:
+    """Check if VAST version is legacy (< 5.3 by default).
+    
+    Args:
+        version_string: Version string like "5.2.0" or "5.2.0-123"
+        threshold: Version threshold as tuple (major, minor). Default is (5, 3)
+        
+    Returns:
+        True if version < threshold, False otherwise
+        
+    Examples:
+        is_vast_version_legacy("5.2.0")  # True (< 5.3)
+        is_vast_version_legacy("5.3.0")  # False (>= 5.3)
+        is_vast_version_legacy("5.1.0")  # True (< 5.3)
+        is_vast_version_legacy("6.0.0")  # False (>= 5.3)
+        is_vast_version_legacy("")       # False (unknown version, assume modern)
+    """
+    if not version_string:
+        # If version is unknown, assume modern version (safer default)
+        return False
+    
+    try:
+        # Use parse_vast_version from setup module
+        # Import here to avoid circular dependency
+        from .setup import parse_vast_version
+        
+        version_tuple = parse_vast_version(version_string)
+        
+        # If parsing failed (returns (0, 0)), assume modern
+        if version_tuple == (0, 0):
+            return False
+        
+        # Compare with threshold
+        return version_tuple < threshold
+    except Exception as e:
+        logging.debug(f"Failed to check if version is legacy: {e}")
+        # On error, assume modern version (safer default)
+        return False
+
+
 def get_api_whitelist() -> Dict[str, List[str]]:
     """Get API whitelist from template parser (cached).
     
