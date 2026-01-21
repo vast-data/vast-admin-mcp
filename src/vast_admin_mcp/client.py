@@ -234,10 +234,10 @@ def resolve_cluster_identifier(identifier: str, config: dict, client_cache: Opti
                                 # Create temporary client to query cluster name
                                 username = c['username']
                                 password = retrieve_password_secure(c['cluster'], username, c['password'])
-                                if c['user_type'] == 'SUPER_ADMIN':
+                                if c.get('user_type') == 'SUPER_ADMIN':
                                     client = VASTClient(address=c['cluster'], user=username, password=password, version='latest')
                                 else:
-                                    client = VASTClient(address=c['cluster'], user=username, password=password, tenant=c['tenant'], version='latest')
+                                    client = VASTClient(address=c['cluster'], user=username, password=password, tenant=c.get('tenant', ''), version='latest')
                                 
                                 # Cache the client if cache dict provided
                                 if client_cache is not None:
@@ -356,10 +356,17 @@ def create_vast_client(cluster: str, use_cache: bool = True):
     except Exception as e:
         raise ValueError(f"Failed to retrieve password for cluster {cluster_address}: {e}")
     
-    if cluster_info['user_type'] == 'SUPER_ADMIN':
+    # Check if this is a legacy version (< 5.3) - these don't support tenant parameter
+    from .utils import is_vast_version_legacy
+    vast_version = cluster_info.get('vast_version', '')
+    is_legacy = is_vast_version_legacy(vast_version)
+    
+    # For legacy versions or SUPER_ADMIN, connect without tenant
+    if is_legacy or cluster_info.get('user_type') == 'SUPER_ADMIN':
         client = VASTClient(address=cluster_address, user=username, password=password, version='latest')
     else:
-        client = VASTClient(address=cluster_address, user=username, password=password, tenant=cluster_info['tenant'], version='latest')
+        # Modern version with tenant admin - use tenant parameter
+        client = VASTClient(address=cluster_address, user=username, password=password, tenant=cluster_info.get('tenant', ''), version='latest')
 
     try:
         # Track which methods we've already wrapped to avoid double-wrapping

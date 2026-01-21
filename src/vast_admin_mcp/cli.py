@@ -797,8 +797,7 @@ def _generate_clusters_mcp_code() -> str:
 
         Returns:
             A list of dictionaries containing cluster information including Cluster, State, Version, Uptime, 
-            Logical Used, Physical Used, Logical Free, Physical Free, Logical Total, Physical Total, Read IOPS, 
-            Write IOPS, Read Throughput, and Write Throughput.
+            Logical Used, Physical Used, Logical Free, Physical Free, IOPS, and Throughput.
         """
         try:
             from vast_admin_mcp.functions import list_clusters

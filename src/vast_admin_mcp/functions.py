@@ -717,7 +717,14 @@ def list_clusters(clusters: str = None):
                            cluster_info.get('cluster_name') in clusters)
             if not cluster_match:
                 continue
-        if cluster_info['user_type'] != 'SUPER_ADMIN':
+        
+        # Check if this is a legacy version (< 5.3) - treat as SUPER_ADMIN
+        from .utils import is_vast_version_legacy
+        vast_version = cluster_info.get('vast_version', '')
+        is_legacy = is_vast_version_legacy(vast_version)
+        
+        # Skip cluster only if it's not SUPER_ADMIN and not legacy version
+        if not is_legacy and cluster_info.get('user_type') != 'SUPER_ADMIN':
             logging.info(f"Skipping cluster: {cluster_info['cluster']} since credentials are not for a super admin user")
         else:
             try:
@@ -759,12 +766,10 @@ def list_clusters(clusters: str = None):
                         'Physical Used': pretty_size(c['physical_space_in_use']),
                         'Logical Free': pretty_size(c['free_logical_space']),
                         'Physical Free': pretty_size(c['free_physical_space']),
-                        'Logical Total': pretty_size(c['logical_space']),
-                        'Physical Total': pretty_size(c['physical_space']),
-                        'Read IOPS': c['rd_iops'],
-                        'Write IOPS': c['wr_iops'],
-                        'Read Throughput': pretty_size(c['rd_bw']) + '/s',
-                        'Write Throughput': pretty_size(c['wr_bw']) + '/s'
+                        #'Logical Total': pretty_size(c['logical_space']),
+                        #'Physical Total': pretty_size(c['physical_space']),
+                        'IOPS': c['rd_iops'] + c['wr_iops'],
+                        'Throughput': pretty_size(c['rd_bw'] + c['wr_bw']) + '/s'
                         }
                     clusters_table.append(cl)
                 
@@ -799,12 +804,10 @@ def list_clusters(clusters: str = None):
                     'Physical Used': 'N/A',
                     'Logical Free': 'N/A',
                     'Physical Free': 'N/A',
-                    'Logical Total': 'N/A',
-                    'Physical Total': 'N/A',
-                    'Read IOPS': 'N/A',
-                    'Write IOPS': 'N/A',
-                    'Read Throughput': 'N/A',
-                    'Write Throughput': error_display  # Use this field to show error
+                    #'Logical Total': 'N/A',
+                    #'Physical Total': 'N/A',
+                    'IOPS': 'N/A',
+                    'Throughput': error_display  # Use this field to show error
                 }
                 clusters_table.append(error_cluster)
                 # Continue with next cluster instead of raising   

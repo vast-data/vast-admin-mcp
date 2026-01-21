@@ -57,6 +57,63 @@ def parse_cluster_address(address: str) -> str:
     return address
 
 
+def parse_vast_version(build_string: str) -> tuple:
+    """Parse VAST version from build string or sw_version.
+    
+    Args:
+        build_string: Version string like "5.2.0-123", "5.2.0", "5.2.3.45", or "vrelease-5-2-3-2169905"
+        
+    Returns:
+        Tuple of (major, minor) version numbers, or (0, 0) if parsing fails
+        
+    Examples:
+        "5.2.0-123" -> (5, 2)
+        "5.2.0" -> (5, 2)
+        "5.2.3.45" -> (5, 2)
+        "5.2" -> (5, 2)
+        "vrelease-5-2-3-2169905" -> (5, 2)
+        "invalid" -> (0, 0)
+    """
+    if not build_string:
+        return (0, 0)
+    
+    try:
+        # Handle "vrelease-5-2-3-2169905" format (build format)
+        if build_string.startswith('vrelease-') or build_string.startswith('v-'):
+            # Strip "vrelease-" or "v-" prefix
+            if build_string.startswith('vrelease-'):
+                version_part = build_string[9:]  # Remove "vrelease-"
+            else:
+                version_part = build_string[2:]  # Remove "v-"
+            
+            # Version numbers are separated by hyphens: "5-2-3-2169905"
+            parts = version_part.split('-')
+            if len(parts) >= 2:
+                major = int(parts[0])
+                minor = int(parts[1])
+                return (major, minor)
+        
+        # Handle standard dot-separated formats: "5.2.0-123", "5.2.0", "5.2.3.45"
+        # Remove any build suffix after hyphen (e.g., "5.2.0-123" -> "5.2.0")
+        version_part = build_string.split('-')[0]
+        
+        # Split by dots and get major.minor
+        parts = version_part.split('.')
+        if len(parts) >= 2:
+            major = int(parts[0])
+            minor = int(parts[1])
+            return (major, minor)
+        elif len(parts) == 1:
+            # Only major version
+            major = int(parts[0])
+            return (major, 0)
+        else:
+            return (0, 0)
+    except (ValueError, AttributeError, IndexError):
+        logging.debug(f"Failed to parse version from build string: {build_string}")
+        return (0, 0)
+
+
 def validate_cluster(cluster: str, tenant: str, username: str, password: str, user_type: str = None) -> Dict[str, Any]:
     """Validate cluster connectivity and return cluster info."""
     try:
@@ -72,22 +129,63 @@ def validate_cluster(cluster: str, tenant: str, username: str, password: str, us
         else:
             client = VASTClient(address=cluster_address, user=username, password=password)
         status = client.login.get()
-        logging.info(f"Successfully connected to VAST cluster at {cluster_address}. User role: {status['user_type']}")
-        cluster_info = client.dashboard.status.get()['clusters'][0]
-        build_number = cluster_info.get('build')
         
-        # Get cluster name from API
-        # Try clusters endpoint first (more reliable)
+        # Get cluster info from clusters endpoint (same as list_clusters function)
+        # This provides sw_version which is the proper version field
         cluster_name = None
+        sw_version = None
+        build_number = None
+        
         try:
             clusters_response = client.clusters.get(page_size=1)
             if clusters_response and 'results' in clusters_response and len(clusters_response['results']) > 0:
-                cluster_name = clusters_response['results'][0].get('name')
+                cluster_data = clusters_response['results'][0]
+                cluster_name = cluster_data.get('name')
+                sw_version = cluster_data.get('sw_version')
         except Exception as e:
-            logging.debug(f"Could not get cluster name from clusters endpoint: {e}")
-            # Fallback: try to get from dashboard status
-            if cluster_info:
-                cluster_name = cluster_info.get('name')
+            logging.debug(f"Could not get cluster info from clusters endpoint: {e}")
+        
+        # Fallback to dashboard.status if clusters endpoint failed
+        if not sw_version:
+            try:
+                cluster_info = client.dashboard.status.get()['clusters'][0]
+                build_number = cluster_info.get('build', '')
+                if not cluster_name:
+                    cluster_name = cluster_info.get('name')
+                # Use build as version fallback
+                sw_version = build_number
+            except Exception as e:
+                logging.debug(f"Could not get cluster info from dashboard.status: {e}")
+                sw_version = ''
+        
+        # Format version like list_clusters does: take first 4 parts if dot-separated
+        if isinstance(sw_version, str) and "." in sw_version and len(sw_version.split(".")) >= 4:
+            vast_version = ".".join(sw_version.split(".")[:4])
+        else:
+            vast_version = sw_version
+        
+        # Parse version to determine if legacy (< 5.3)
+        version_tuple = parse_vast_version(vast_version)
+        
+        # Check if this is a legacy version (< 5.3)
+        from .utils import is_vast_version_legacy
+        is_legacy = is_vast_version_legacy(vast_version)
+        
+        # Get user_type from status (might not be present in versions < 5.3)
+        user_type_from_api = status.get('user_type')
+        
+        if is_legacy:
+            # For legacy versions (< 5.3), force SUPER_ADMIN and ignore tenant
+            user_type_from_api = 'SUPER_ADMIN'
+            tenant = ''  # Clear tenant for legacy versions
+            logging.info(f"Successfully connected to VAST cluster at {cluster_address}. "
+                        f"Legacy version {vast_version} detected - treating as SUPER_ADMIN")
+        else:
+            # For modern versions, use API user_type or default to TENANT_ADMIN
+            if not user_type_from_api:
+                user_type_from_api = 'TENANT_ADMIN'
+            logging.info(f"Successfully connected to VAST cluster at {cluster_address}. "
+                        f"Version: {vast_version}, User role: {user_type_from_api}")
 
         # Store password securely (use parsed address for storage)
         secure_password_ref = store_password_secure(cluster_address, username, password)
@@ -96,7 +194,8 @@ def validate_cluster(cluster: str, tenant: str, username: str, password: str, us
             "username": username,
             "password": secure_password_ref,  # Now stores secure reference instead of base64
             "tenant": tenant,
-            "user_type": status['user_type'],
+            "user_type": user_type_from_api,
+            "vast_version": vast_version,  # Store version permanently in config
         }
         
         # Add cluster_name if we got it from the API
@@ -104,8 +203,8 @@ def validate_cluster(cluster: str, tenant: str, username: str, password: str, us
             result["cluster_name"] = cluster_name
             logging.debug(f"Retrieved cluster name: {cluster_name}")
         
-        # Store build separately for display only (not saved to config)
-        result['_build'] = build_number
+        # Store build/version separately for display only (not saved to config)
+        result['_build'] = build_number if build_number else vast_version
         return result
     except Exception as e:
         logging.error(f"Failed to connect to VAST cluster at {cluster}. Error: {e}")
@@ -144,7 +243,8 @@ def setup_config(config_file: str = CONFIG_FILE):
             print(f"\nCurrent configured clusters ({len(config['clusters'])}):")
             print("-" * 50)
             for i, cluster in enumerate(config['clusters'], 1):
-                print(f"  {i}. {cluster['cluster']} - {cluster['user_type']} - Tenant: {cluster.get('tenant', 'N/A')}")
+                version_info = f" (v{cluster['vast_version']})" if cluster.get('vast_version') else ""
+                print(f"  {i}. {cluster['cluster']} - {cluster.get('user_type', 'N/A')}{version_info} - Tenant: {cluster.get('tenant', 'N/A')}")
         else:
             print("\nNo clusters currently configured.")
         
@@ -290,7 +390,7 @@ def _add_new_cluster():
             return None
         
         # For super admin users, ask for tenant
-        if cluster_info['user_type'] == 'SUPER_ADMIN':
+        if cluster_info.get('user_type') == 'SUPER_ADMIN':
             tenant = input(f"Cluster admin user detected. Which tenant do you want to use [default]: ").strip() or 'default'
             cluster_info['tenant'] = tenant
         
@@ -315,7 +415,8 @@ def _edit_cluster(cluster_info):
         print(f"Current cluster: {cluster_info['cluster']}")
         print(f"Current tenant: {cluster_info.get('tenant', 'N/A')}")
         print(f"Current user: {cluster_info['username']}")
-        print(f"User type: {cluster_info['user_type']}")
+        version_info = f" (v{cluster_info['vast_version']})" if cluster_info.get('vast_version') else ""
+        print(f"User type: {cluster_info.get('user_type', 'N/A')}{version_info}")
         
         print("\nWhat would you like to update?")
         print("  1. Username/Password")
@@ -358,7 +459,7 @@ def _edit_cluster(cluster_info):
             
         elif choice == '2':
             # Update tenant (super admin only)
-            if cluster_info['user_type'] != 'SUPER_ADMIN':
+            if cluster_info.get('user_type') != 'SUPER_ADMIN':
                 logging.error("Tenant can only be changed for super admin users.")
                 return None
             
@@ -398,7 +499,8 @@ def _select_cluster(clusters, prompt):
     
     print(f"\n{prompt}:")
     for i, cluster in enumerate(clusters, 1):
-        print(f"  {i}. {cluster['cluster']} - {cluster['user_type']} - Tenant: {cluster.get('tenant', 'N/A')}")
+        version_info = f" (v{cluster['vast_version']})" if cluster.get('vast_version') else ""
+        print(f"  {i}. {cluster['cluster']} - {cluster.get('user_type', 'N/A')}{version_info} - Tenant: {cluster.get('tenant', 'N/A')}")
     
     try:
         choice = input(f"Select cluster [1-{len(clusters)}, 0 to cancel]: ").strip()
@@ -431,7 +533,8 @@ def _test_cluster_connectivity(cluster_info):
         
         if result:
             print(f"✅ Successfully connected to {cluster_info['cluster']}")
-            print(f"   User: {result['username']} ({result['user_type']})")
+            version_info = f" (v{result['vast_version']})" if result.get('vast_version') else ""
+            print(f"   User: {result['username']} ({result.get('user_type', 'N/A')}{version_info})")
             if '_build' in result:
                 print(f"   Build: {result['_build']}")
         else:
