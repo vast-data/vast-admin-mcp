@@ -8,13 +8,19 @@ import os
 import tempfile
 from datetime import datetime, timezone
 import time
+import fnmatch
+import itertools
+import re
 
 from .config import (
     load_config, REST_PAGE_SIZE, PERFORMANCE_AGGREGATION_FUNCTION, TEMPLATE_MODIFICATIONS_FILE, get_default_template_path,
     MAX_VIEW_TIMEFRAME_SECONDS, METRICS_API_LIMIT,
     GRANULARITY_THRESHOLD_SECONDS, GRANULARITY_THRESHOLD_HOURS, GRANULARITY_THRESHOLD_DAYS,
     EXCLUDED_VIEW_METRIC_PATTERNS, QUERY_USERS_DEFAULT_TOP, QUERY_USERS_MAX_TOP,
-    GRAPH_TEMP_DIR, GRAPH_CLEANUP_AGE_HOURS
+    GRAPH_TEMP_DIR, GRAPH_CLEANUP_AGE_HOURS,
+    DATAFLOW_DEFAULT_RESULTS_NUM, DATAFLOW_DEFAULT_SORT_BY, DATAFLOW_DEFAULT_SORT_TYPE,
+    DATAFLOW_DEFAULT_LIMIT, DATAFLOW_DEFAULT_TOP_N_DIAGRAM, DATAFLOW_VALID_PROTOCOLS,
+    DATAFLOW_DIAGRAM_MERMAID_THEME
 )
 from .utils import (
     pretty_size, parse_time_duration, parse_order_spec, apply_ordering, normalize_field_name, get_api_whitelist,
@@ -3271,4 +3277,813 @@ def list_merged(command_name: str, **kwargs) -> List[Dict]:
                 del row[k]
         
         return normalized_results
+
+
+# ============================================================================
+# Dataflow (iodata) functions
+# ============================================================================
+
+# Rate fields in iodata API nodes_data that need normalization when a timeframe
+# is specified. The iodata API with graph=True accumulates (sums) rate values
+# across all data points (1 per minute) instead of averaging them. For example,
+# with timeframe=1h, bw is the SUM of 60 per-minute bw values, not the average.
+# We divide by the number of minutes to convert back to per-second rates.
+_IODATA_RATE_FIELDS = frozenset([
+    'bw', 'read_bw', 'write_bw',
+    'iops', 'read_iops', 'write_iops',
+    'md_iops', 'read_md_iops', 'write_md_iops',
+])
+
+
+def _dataflow_normalize_nodes(nodes_data: Dict, timeframe_minutes: float) -> Dict:
+    """Normalize accumulated rate values in nodes_data by dividing by the number of minutes.
+
+    When the iodata API is called with a timeframe (e.g., '1h'), it returns rate fields
+    (bw, iops, etc.) as accumulated sums across all data points (1 per minute), not averages.
+    This function divides those fields by the number of minutes to produce average per-second rates.
+
+    Args:
+        nodes_data: The raw nodes_data dict from the iodata API response.
+        timeframe_minutes: Number of minutes in the requested timeframe.
+
+    Returns:
+        A new nodes_data dict with normalized rate fields. Non-rate fields are untouched.
+    """
+    if timeframe_minutes <= 1:
+        return nodes_data  # realtime or <=1m, no normalization needed
+
+    normalized = {}
+    for node_type, nodes in nodes_data.items():
+        if not isinstance(nodes, dict):
+            normalized[node_type] = nodes
+            continue
+        normalized[node_type] = {}
+        for key, node_data in nodes.items():
+            if not isinstance(node_data, dict):
+                normalized[node_type][key] = node_data
+                continue
+            new_node = {}
+            for field, value in node_data.items():
+                if field in _IODATA_RATE_FIELDS and isinstance(value, (int, float)):
+                    new_node[field] = value / timeframe_minutes
+                else:
+                    new_node[field] = value
+            normalized[node_type][key] = new_node
+    return normalized
+
+
+def _dataflow_format_bw(value) -> str:
+    """Format a bandwidth value from the iodata API (which returns BW in MB/s).
+    
+    Converts to the most readable unit: TB/s, GB/s, MB/s, KB/s, or B/s.
+    
+    Args:
+        value: Bandwidth in MB/s (float or int from iodata API)
+        
+    Returns:
+        Human-readable bandwidth string (e.g., "1.23 GB/s", "456.78 MB/s")
+    """
+    try:
+        mb = float(value)
+    except (ValueError, TypeError):
+        return "0 B/s"
+    if mb == 0:
+        return "0 B/s"
+    abs_mb = abs(mb)
+    if abs_mb >= 1024 * 1024:
+        return f"{mb / (1024 * 1024):.2f} TB/s"
+    if abs_mb >= 1024:
+        return f"{mb / 1024:.2f} GB/s"
+    if abs_mb >= 1:
+        return f"{mb:.2f} MB/s"
+    kb = mb * 1024
+    if abs(kb) >= 1:
+        return f"{kb:.2f} KB/s"
+    b = kb * 1024
+    return f"{b:.2f} B/s"
+
+
+def _dataflow_hostname(nodes: Dict, host_key: str) -> str:
+    """Resolve host key to entity_details.hostname, else ip, else key.
+    
+    Args:
+        nodes: The nodes_data dict from iodata API response
+        host_key: The host key to resolve
+        
+    Returns:
+        Resolved hostname string (never None)
+    """
+    if not host_key or host_key == "-":
+        return "-"
+    ed = (nodes.get("host") or {}).get(host_key, {}).get("entity_details") or {}
+    if not isinstance(ed, dict):
+        return str(host_key)
+    hostname = ed.get("hostname")
+    if hostname not in (None, ""):
+        return str(hostname)
+    ip = ed.get("ip")
+    if ip not in (None, ""):
+        return str(ip)
+    return str(host_key)
+
+
+def _dataflow_user_display(nodes: Dict, user_key: str) -> str:
+    """Resolve user key to 'username (uid)', else username, else uid, else key.
+    
+    Args:
+        nodes: The nodes_data dict from iodata API response
+        user_key: The user key to resolve
+        
+    Returns:
+        Resolved user display string (never None)
+    """
+    if not user_key or user_key == "-":
+        return "-"
+    ed = (nodes.get("user") or {}).get(user_key, {}).get("entity_details") or {}
+    if not isinstance(ed, dict):
+        return str(user_key)
+    username = ed.get("username") if ed.get("username") not in (None, "") else None
+    uid = ed.get("uid")
+    if username is not None and uid is not None:
+        return f"{username} ({uid})"
+    if username is not None:
+        return str(username)
+    if uid is not None:
+        return str(uid)
+    return str(user_key)
+
+
+def _dataflow_vip_ip(nodes: Dict, vip_key: str) -> str:
+    """Resolve VIP key to entity_details.ip, else return key.
+    
+    Args:
+        nodes: The nodes_data dict from iodata API response
+        vip_key: The VIP key to resolve
+        
+    Returns:
+        Resolved VIP IP string (never None)
+    """
+    if not vip_key or vip_key == "-":
+        return "-"
+    ed = (nodes.get("vip") or {}).get(vip_key, {}).get("entity_details") or {}
+    if not isinstance(ed, dict):
+        return str(vip_key)
+    val = ed.get("ip")
+    return str(val) if val not in (None, "") else str(vip_key)
+
+
+def _dataflow_column_matches(value: str, pattern: str, multi_value: bool = False) -> bool:
+    """Check if value matches wildcard pattern (* and ? supported).
+    
+    For multi-value columns (comma-separated), returns True if ANY individual
+    value matches the pattern.
+    
+    Args:
+        value: The value to check (may be comma-separated if multi_value=True)
+        pattern: Wildcard pattern to match against
+        multi_value: If True, split value by comma and match each part individually
+        
+    Returns:
+        True if value (or any sub-value) matches pattern
+    """
+    if multi_value:
+        parts = [v.strip() for v in str(value).split(",")]
+        return any(fnmatch.fnmatch(part, pattern) for part in parts)
+    return fnmatch.fnmatch(str(value), pattern)
+
+
+def _dataflow_build_rows(nodes_data: Dict, connections: Dict, column_filters: Dict) -> List[Tuple]:
+    """Build table rows: one per (user, host, view) with tenant, view, vip, vippool, cnodes.
+    
+    Args:
+        nodes_data: The nodes_data dict from iodata API response
+        connections: The connections dict from iodata API response
+        column_filters: Dict of column_name -> wildcard pattern for client-side filtering
+        
+    Returns:
+        List of row tuples: (user, host, tenant, view_path, vip_str, vippool_str, cnode_str, bw, rd_iops, wr_iops)
+    """
+    nodes = nodes_data or {}
+    conn = connections or {}
+    view_conn = conn.get("view") or {}
+    view_nodes = nodes.get("view") or {}
+
+    rows = []
+    for view_key, view_links in view_conn.items():
+        users = view_links.get("user") or []
+        hosts = view_links.get("host") or []
+        vips = view_links.get("vip") or []
+        vippools = view_links.get("vippool") or []
+        cnodes = view_links.get("cnode") or []
+
+        ed = view_nodes.get(view_key, {}).get("entity_details") or {}
+        if isinstance(ed, dict):
+            view_path = ed.get("path") or view_key
+            tenant = ed.get("tenant") or ""
+        else:
+            view_path = view_key
+            tenant = ""
+
+        # Use pre-computed totals from the API directly - no manual aggregation.
+        # Each node object already contains the total performance for that object.
+        view_node = view_nodes.get(view_key, {})
+        bw = view_node.get("bw") or 0
+        rd_iops = view_node.get("read_iops") or 0
+        wr_iops = view_node.get("write_iops") or 0
+
+        vip_str = ", ".join(_dataflow_vip_ip(nodes, k) for k in vips) if vips else "-"
+        vippool_str = ", ".join(vippools) if vippools else "-"
+        cnode_str = ", ".join(cnodes) if cnodes else "-"
+
+        if not users:
+            users = ["-"]
+        if not hosts:
+            hosts = ["-"]
+
+        for user_key, host_key in itertools.product(users, hosts):
+            user_display = _dataflow_user_display(nodes, user_key)
+            host_display = _dataflow_hostname(nodes, host_key)
+            row = (user_display, host_display, tenant, view_path, vip_str, vippool_str, cnode_str, bw, rd_iops, wr_iops)
+            if column_filters:
+                # Columns at indices 4, 5, 6 are comma-separated multi-value fields
+                multi_value_cols = {"vip", "vippool", "cnode"}
+                if not all(
+                    _dataflow_column_matches(row[i], column_filters[col], multi_value=(col in multi_value_cols))
+                    for col, i in [
+                        ("user", 0),
+                        ("host", 1),
+                        ("tenant", 2),
+                        ("view", 3),
+                        ("vip", 4),
+                        ("vippool", 5),
+                        ("cnode", 6),
+                    ]
+                    if col in column_filters
+                ):
+                    continue
+            rows.append(row)
+
+    return rows
+
+
+def _dataflow_consolidate_rows(rows: List[Tuple]) -> List[Tuple]:
+    """Consolidate rows: one row per (tenant, view); User and Host columns become comma-separated lists.
+    
+    Args:
+        rows: List of row tuples from _dataflow_build_rows
+        
+    Returns:
+        List of consolidated row tuples: (tenant, view_path, users_str, hosts_str, vip_str, vippool_str, cnode_str, bw, rd_iops, wr_iops)
+    """
+    key_to_users = {}
+    key_to_hosts = {}
+    key_to_rest = {}
+    for row in rows:
+        user_display, host_display, tenant, view_path, vip_str, vippool_str, cnode_str, bw, rd_iops, wr_iops = row
+        key = (tenant, view_path)
+        key_to_users.setdefault(key, set()).add(user_display)
+        key_to_hosts.setdefault(key, set()).add(host_display)
+        key_to_rest[key] = (vip_str, vippool_str, cnode_str, bw, rd_iops, wr_iops)
+
+    out = []
+    for (tenant, view_path) in sorted(key_to_rest.keys()):
+        key = (tenant, view_path)
+        users_cell = ", ".join(sorted(str(x) if x is not None else "-" for x in key_to_users[key]))
+        hosts_cell = ", ".join(sorted(str(x) if x is not None else "-" for x in key_to_hosts[key]))
+        vip_str, vippool_str, cnode_str, bw, rd_iops, wr_iops = key_to_rest[key]
+        out.append((tenant, view_path, users_cell, hosts_cell, vip_str, vippool_str, cnode_str, bw, rd_iops, wr_iops))
+    return out
+
+
+def _dataflow_format_table(consolidated_rows: List[Tuple], show_vips: bool = False) -> List[Dict]:
+    """Format consolidated dataflow rows into a list of dicts for MCP output.
+    
+    Args:
+        consolidated_rows: List of consolidated row tuples from _dataflow_consolidate_rows
+        show_vips: If True, include VIP column. Default: False (VIPs hidden).
+        
+    Returns:
+        List of dicts with keys: Tenant, View, Users, Hosts, [VIP], Vippool, Cnodes, BW, RD_IOPS, WR_IOPS
+    """
+    result = []
+    for row in consolidated_rows:
+        tenant, view_path, users_str, hosts_str, vip_str, vippool_str, cnode_str, bw, rd_iops, wr_iops = row
+        
+        # Format bandwidth (iodata API returns BW in MB/s)
+        bw_formatted = _dataflow_format_bw(bw)
+        
+        entry = {
+            'Tenant': tenant or "-",
+            'View': view_path or "-",
+            'Users': users_str or "-",
+            'Hosts': hosts_str or "-",
+        }
+        if show_vips:
+            entry['VIP'] = vip_str or "-"
+        entry.update({
+            'Vippool': vippool_str or "-",
+            'Cnodes': cnode_str or "-",
+            'BW': bw_formatted,
+            'RD_IOPS': int(rd_iops) if rd_iops else 0,
+            'WR_IOPS': int(wr_iops) if wr_iops else 0,
+        })
+        result.append(entry)
+    return result
+
+
+def _dataflow_sanitize_mermaid_id(text: str) -> str:
+    """Sanitize a string to be a valid Mermaid node ID.
+    
+    Args:
+        text: The string to sanitize
+        
+    Returns:
+        A string safe for use as a Mermaid node ID
+    """
+    # Replace non-alphanumeric chars with underscores, collapse multiple underscores
+    sanitized = re.sub(r'[^a-zA-Z0-9]', '_', str(text))
+    sanitized = re.sub(r'_+', '_', sanitized).strip('_')
+    return sanitized or "unknown"
+
+
+def _dataflow_format_vips_for_label(vips: List[str], per_line: int = 3) -> str:
+    """Format a list of VIP addresses into lines with up to `per_line` IPs each.
+    
+    Args:
+        vips: List of VIP IP strings
+        per_line: Maximum number of IPs per line
+        
+    Returns:
+        Formatted string with newlines separating groups
+    """
+    if not vips:
+        return ""
+    chunks = [vips[i:i + per_line] for i in range(0, len(vips), per_line)]
+    return "<br/>".join(", ".join(chunk) for chunk in chunks)
+
+
+def _dataflow_build_node_perf(nodes_data: Dict) -> Dict[str, Dict]:
+    """Build a mapping of display name -> performance data for hosts and views.
+    
+    Looks up BW and IOPS from the raw nodes_data for each host and view,
+    keyed by the display name (hostname/IP for hosts, path for views).
+    
+    Args:
+        nodes_data: The nodes_data dict from iodata API response
+        
+    Returns:
+        Dict mapping display_name -> {'bw': float, 'rd_iops': float, 'wr_iops': float}
+    """
+    perf = {}
+    
+    # Host performance - use pre-computed totals from the API directly, no manual aggregation.
+    host_nodes = (nodes_data or {}).get("host") or {}
+    for _key, hdata in host_nodes.items():
+        ed = hdata.get("entity_details") or {}
+        if not isinstance(ed, dict):
+            continue
+        display = ed.get("hostname") or ed.get("ip") or str(_key)
+        bw = hdata.get("bw") or 0
+        rd_iops = hdata.get("read_iops") or 0
+        wr_iops = hdata.get("write_iops") or 0
+        perf[str(display)] = {'bw': bw, 'rd_iops': rd_iops, 'wr_iops': wr_iops}
+    
+    return perf
+
+
+def _dataflow_generate_mermaid(consolidated_rows: List[Tuple], nodes_data: Optional[Dict] = None,
+                               connections: Optional[Dict] = None, show_vips: bool = False,
+                               top_n: int = 5,
+                               theme: str = DATAFLOW_DIAGRAM_MERMAID_THEME) -> str:
+    """Generate a Mermaid diagram showing the dataflow between components.
+    
+    The diagram shows: Host -> CNode -> View, grouped into labeled subgraphs
+    by component type. Host and View nodes include BW and IOPS performance info.
+    When show_vips is True, CNode nodes also include their associated VIP addresses.
+    
+    When top_n > 0 and there are more hosts or views than top_n, only the top N
+    (by bandwidth) are shown, with a summary node indicating how many more exist.
+    
+    Args:
+        consolidated_rows: List of consolidated row tuples from _dataflow_consolidate_rows
+        nodes_data: Raw nodes_data dict from iodata API (used for per-host performance)
+        connections: Raw connections dict from iodata API (used for per-CNode VIP mapping)
+        show_vips: If True, include VIP addresses inside CNode labels. Default: False.
+        top_n: Maximum number of hosts and views to show in the diagram (by BW).
+               0 means no limit (show all). Default: 5.
+        theme: Mermaid theme name for the %%{init}%% directive. Default from config.
+        
+    Returns:
+        Mermaid diagram string (graph LR) with theme init directive
+    """
+    if not consolidated_rows:
+        return ""
+    
+    # Build per-host performance lookup
+    node_perf = _dataflow_build_node_perf(nodes_data) if nodes_data else {}
+    
+    # Build per-CNode VIP mapping from connections data (authoritative source).
+    # The connections['cnode'] dict maps each CNode to its specific VIPs.
+    cnode_vip_map = {}  # cnode_name -> list of VIP IPs
+    if connections:
+        for cnode_key, cnode_links in (connections.get("cnode") or {}).items():
+            cnode_vip_map[cnode_key] = cnode_links.get("vip") or []
+    
+    # Use short numeric IDs (H1, C1, V1) to prevent LLMs from "fixing" long
+    # sanitized IDs (e.g., converting underscores back to hyphens in UUIDs).
+    # Maps: original_key -> short_id
+    host_id_map = {}     # host_display -> "H1", "H2", ...
+    cnode_id_map = {}    # cnode_name -> "C1", "C2", ...
+    view_id_map = {}     # view_path -> "V1", "V2", ...
+    
+    host_labels = {}     # short_id -> label
+    host_bw_numeric = {} # short_id -> numeric BW (MB/s) for ranking
+    cnode_labels = {}    # short_id -> (cnode_name, label)
+    view_labels = {}     # short_id -> label
+    view_bw_numeric = {} # short_id -> numeric BW (MB/s) for ranking
+    edges = []           # list of (from_short_id, to_short_id) tuples
+    added_edges = set()
+    
+    for row in consolidated_rows:
+        tenant, view_path, users_str, hosts_str, vip_str, vippool_str, cnode_str, bw, rd_iops, wr_iops = row
+        
+        # -- View node with perf info --
+        if view_path not in view_id_map:
+            view_id = f"V{len(view_id_map) + 1}"
+            view_id_map[view_path] = view_id
+            view_label = view_path if view_path and view_path != "-" else "unknown_view"
+            tenant_prefix = f"{tenant}: " if tenant and tenant != "-" else ""
+            bw_fmt = _dataflow_format_bw(bw)
+            rd = int(rd_iops) if rd_iops else 0
+            wr = int(wr_iops) if wr_iops else 0
+            view_labels[view_id] = f'{tenant_prefix}{view_label}<br/>BW: {bw_fmt} | RD: {rd} | WR: {wr}'
+            try:
+                view_bw_numeric[view_id] = float(bw) if bw else 0.0
+            except (ValueError, TypeError):
+                view_bw_numeric[view_id] = 0.0
+        view_sid = view_id_map[view_path]
+        
+        hosts = [h.strip() for h in hosts_str.split(",") if h.strip() and h.strip() != "-"]
+        cnodes_list = [c.strip() for c in cnode_str.split(",") if c.strip() and c.strip() != "-"]
+        
+        # -- Collect CNode nodes and add CNode -> View edges --
+        for cnode in cnodes_list:
+            if cnode not in cnode_id_map:
+                cnode_id = f"C{len(cnode_id_map) + 1}"
+                cnode_id_map[cnode] = cnode_id
+            cnode_sid = cnode_id_map[cnode]
+            cnode_labels[cnode_sid] = cnode  # store cnode name for label building
+            
+            edge = (cnode_sid, view_sid)
+            if edge not in added_edges:
+                edges.append(edge)
+                added_edges.add(edge)
+        
+        # -- Collect Host nodes (with perf) and Host -> CNode edges --
+        for host in hosts:
+            if host not in host_id_map:
+                host_id = f"H{len(host_id_map) + 1}"
+                host_id_map[host] = host_id
+                hp = node_perf.get(host, {})
+                h_bw = hp.get('bw', 0)
+                h_rd = int(hp.get('rd_iops', 0))
+                h_wr = int(hp.get('wr_iops', 0))
+                host_bw_numeric[host_id] = float(h_bw) if h_bw else 0.0
+                if h_bw or h_rd or h_wr:
+                    bw_fmt = _dataflow_format_bw(h_bw)
+                    host_labels[host_id] = f'{host}<br/>BW: {bw_fmt} | RD: {h_rd} | WR: {h_wr}'
+                else:
+                    host_labels[host_id] = host
+            host_sid = host_id_map[host]
+            
+            if cnodes_list:
+                for cnode in cnodes_list:
+                    cnode_sid = cnode_id_map[cnode]
+                    edge = (host_sid, cnode_sid)
+                    if edge not in added_edges:
+                        edges.append(edge)
+                        added_edges.add(edge)
+            else:
+                edge = (host_sid, view_sid)
+                if edge not in added_edges:
+                    edges.append(edge)
+                    added_edges.add(edge)
+    
+    # ── Top-N truncation: keep only top_n hosts and views by BW ──
+    if top_n > 0:
+        # Truncate hosts
+        if len(host_labels) > top_n:
+            sorted_hosts = sorted(host_bw_numeric.items(), key=lambda x: x[1], reverse=True)
+            keep_host_ids = {h[0] for h in sorted_hosts[:top_n]}
+            removed_host_count = len(host_labels) - top_n
+            host_labels = {k: v for k, v in host_labels.items() if k in keep_host_ids}
+            host_labels["HMORE"] = f"... and {removed_host_count} more hosts"
+            # Remove edges from truncated hosts
+            edges = [(f, t) for (f, t) in edges
+                     if not (f.startswith("H") and f != "HMORE" and f not in keep_host_ids)]
+        
+        # Truncate views
+        if len(view_labels) > top_n:
+            sorted_views = sorted(view_bw_numeric.items(), key=lambda x: x[1], reverse=True)
+            keep_view_ids = {v[0] for v in sorted_views[:top_n]}
+            removed_view_count = len(view_labels) - top_n
+            view_labels = {k: v for k, v in view_labels.items() if k in keep_view_ids}
+            view_labels["VMORE"] = f"... and {removed_view_count} more views"
+            # Remove edges to truncated views
+            edges = [(f, t) for (f, t) in edges
+                     if not (t.startswith("V") and t != "VMORE" and t not in keep_view_ids)]
+        
+        # Remove orphaned CNodes (no remaining edges)
+        referenced_cnodes = set()
+        for f, t in edges:
+            if f.startswith("C"):
+                referenced_cnodes.add(f)
+            if t.startswith("C"):
+                referenced_cnodes.add(t)
+        cnode_labels = {k: v for k, v in cnode_labels.items() if k in referenced_cnodes}
+    
+    # Build the diagram with subgraphs
+    lines = [
+        f"%%{{init: {{'theme': '{theme}'}}}}%%",
+        "graph LR",
+    ]
+    
+    # Hosts subgraph
+    if host_labels:
+        lines.append('  subgraph Hosts')
+        for sid, label in host_labels.items():
+            lines.append(f'    {sid}["{label}"]')
+        lines.append('  end')
+    
+    # CNodes subgraph (optionally with VIPs embedded in the label)
+    # Uses rectangle shape [""] — same as Hosts and Views for consistency.
+    # VIP mapping comes from connections['cnode'] (authoritative per-CNode VIPs).
+    if cnode_labels:
+        lines.append('  subgraph CNodes')
+        for sid, cnode_name in cnode_labels.items():
+            if show_vips:
+                vips_list = sorted(cnode_vip_map.get(cnode_name, []))
+                if vips_list:
+                    vips_label = _dataflow_format_vips_for_label(vips_list)
+                    lines.append(f'    {sid}["{cnode_name}<br/>{vips_label}"]')
+                else:
+                    lines.append(f'    {sid}["{cnode_name}"]')
+            else:
+                lines.append(f'    {sid}["{cnode_name}"]')
+        lines.append('  end')
+    
+    # Views subgraph
+    if view_labels:
+        lines.append('  subgraph Views')
+        for sid, label in view_labels.items():
+            lines.append(f'    {sid}["{label}"]')
+        lines.append('  end')
+    
+    # Edges (outside subgraphs)
+    for from_id, to_id in edges:
+        lines.append(f'  {from_id} --> {to_id}')
+    
+    return "\n".join(lines)
+
+
+def _validate_iso_datetime(dt_str: str) -> str:
+    """Validate that a string is a valid ISO 8601 datetime.
+    
+    Args:
+        dt_str: Datetime string to validate (e.g., '2025-02-16T10:00:00.000Z')
+        
+    Returns:
+        The validated datetime string
+        
+    Raises:
+        ValueError: If the string is not a valid ISO datetime
+    """
+    try:
+        # Try parsing as ISO format
+        datetime.fromisoformat(dt_str.replace('Z', '+00:00'))
+        return dt_str
+    except (ValueError, AttributeError):
+        raise ValueError(
+            f"Invalid datetime format '{dt_str}'. "
+            f"Expected ISO 8601 format, e.g., '2025-02-16T10:00:00.000Z'"
+        )
+
+
+def list_dataflow(
+    cluster: str,
+    view_filter: Optional[str] = None,
+    timeframe: Optional[str] = None,
+    start_time: Optional[str] = None,
+    end_time: Optional[str] = None,
+    protocol_filter: Optional[str] = None,
+    sort_by: str = DATAFLOW_DEFAULT_SORT_BY,
+    sort_type: str = DATAFLOW_DEFAULT_SORT_TYPE,
+    limit: int = DATAFLOW_DEFAULT_LIMIT,
+    results_num: int = DATAFLOW_DEFAULT_RESULTS_NUM,
+    filter_user: Optional[str] = None,
+    filter_host: Optional[str] = None,
+    filter_tenant: Optional[str] = None,
+    filter_view: Optional[str] = None,
+    filter_vip: Optional[str] = None,
+    filter_vippool: Optional[str] = None,
+    filter_cnode: Optional[str] = None,
+    show_vips: bool = False,
+    top_n_diagram: int = DATAFLOW_DEFAULT_TOP_N_DIAGRAM,
+) -> Dict:
+    """List dataflow analytics showing how hosts communicate with VAST components.
+    
+    Queries the VAST iodata API to retrieve data flow analytics showing connections
+    between hosts, users, VIPs, views, vippools, and cnodes along with bandwidth
+    and IOPS metrics.
+    
+    Args:
+        cluster: Target cluster address or name (required). Use list_clusters() to discover available clusters.
+        view_filter: API-side view filter (exact string match). Only return data for this specific view PATH
+                     (e.g., "/data/share1"). NOTE: This must be a view path, not a view name.
+        timeframe: Relative time window (e.g., "10m", "1h", "24h"). Mutually exclusive with start_time/end_time.
+        start_time: Absolute start of time range in ISO format (e.g., "2025-02-16T10:00:00.000Z").
+                    Mutually exclusive with timeframe.
+        end_time: Absolute end of time range in ISO format (e.g., "2025-02-16T10:00:00.000Z").
+                  Mutually exclusive with timeframe.
+        protocol_filter: Filter by protocol. Must be one of: NFS, NFS4, S3, SMB.
+        sort_by: API sort field (default: "bw"). Options: bw, read_bw, write_bw, etc.
+        sort_type: API sort type (default: "total").
+        limit: API result limit (default: 200).
+        results_num: API results_num (default: 100).
+        filter_user: Client-side wildcard filter for User column (e.g., "*runner*").
+        filter_host: Client-side wildcard filter for Host column.
+        filter_tenant: Client-side wildcard filter for Tenant column.
+        filter_view: Client-side wildcard filter for View PATH column (e.g., "*/data*").
+                     NOTE: This filters by view path, not view name.
+        filter_vip: Client-side wildcard filter for VIP column.
+        filter_vippool: Client-side wildcard filter for Vippool column.
+        filter_cnode: Client-side wildcard filter for Cnode column.
+        show_vips: If True, include VIP addresses inside CNode labels in the Mermaid diagram.
+                   Default: False (VIPs hidden from diagram for cleaner output).
+        top_n_diagram: Maximum number of hosts and views to show in the Mermaid diagram,
+                       ranked by bandwidth. 0 means no limit (show all). Default: 5.
+        
+    Returns:
+        Dict with keys:
+            - timestamp: Data timestamp from API
+            - dataflow: List of dicts with Tenant, View, Users, Hosts, VIP, Vippool, Cnodes, BW, RD_IOPS, WR_IOPS
+            - mermaid_diagram: Mermaid diagram string showing the dataflow topology
+            
+    Raises:
+        ValueError: If cluster not found, invalid parameters, or API error
+    """
+    if not cluster:
+        raise ValueError("cluster parameter is required")
+    
+    # Validate time parameters (mutually exclusive)
+    if timeframe and (start_time or end_time):
+        raise ValueError(
+            "Cannot specify both 'timeframe' and 'start_time'/'end_time'. "
+            "Use either a relative timeframe (e.g., '10m') or an absolute time range, not both."
+        )
+    
+    # Validate timeframe if provided
+    if timeframe:
+        try:
+            parse_time_duration(timeframe)
+        except Exception as e:
+            raise ValueError(f"Invalid timeframe format '{timeframe}': {e}")
+    
+    # Validate start_time/end_time if provided
+    if start_time:
+        _validate_iso_datetime(start_time)
+    if end_time:
+        _validate_iso_datetime(end_time)
+    
+    # Validate protocol_filter
+    if protocol_filter:
+        protocol_upper = protocol_filter.upper()
+        if protocol_upper not in DATAFLOW_VALID_PROTOCOLS:
+            raise ValueError(
+                f"Invalid protocol_filter '{protocol_filter}'. "
+                f"Must be one of: {', '.join(DATAFLOW_VALID_PROTOCOLS)}"
+            )
+        protocol_filter = protocol_upper
+    
+    # Resolve cluster
+    config = load_config()
+    cluster_address, cluster_config, cluster_name = resolve_cluster_identifier(cluster, config)
+    
+    # Create client
+    client = create_vast_client(cluster_address)
+    
+    # Build API parameters
+    params = {
+        "graph": "true",
+        "results_num": results_num,
+        "sort_by": sort_by,
+        "sort_type": sort_type,
+        "limit": limit,
+    }
+    
+    # Add time parameters
+    if timeframe:
+        params["time_frame"] = timeframe
+    if start_time:
+        params["start_time"] = start_time
+    if end_time:
+        params["end_time"] = end_time
+    
+    # Add optional filters
+    if view_filter:
+        params["view_filter"] = view_filter
+    if protocol_filter:
+        params["protocol_filter"] = protocol_filter
+    
+    logging.info(
+        f"Retrieving dataflow analytics on cluster: {cluster_address}, "
+        f"timeframe: {timeframe or 'realtime'}, protocol: {protocol_filter or 'all'}"
+    )
+    
+    # Call iodata API
+    whitelist = get_api_whitelist()
+    try:
+        result = call_vast_api(
+            client=client,
+            endpoint='iodata',
+            method='get',
+            params=params,
+            whitelist=whitelist
+        )
+    except Exception as e:
+        logging.error(f"Dataflow API call failed: {e}")
+        raise ValueError(f"Failed to retrieve dataflow data: {e}")
+    
+    # call_vast_api wraps dict results in a list
+    if isinstance(result, list) and len(result) > 0:
+        data = result[0]
+    elif isinstance(result, dict):
+        data = result
+    else:
+        raise ValueError("Unexpected response format from iodata API")
+    
+    nodes_data = data.get("nodes_data")
+    connections = data.get("connections")
+    if nodes_data is None or connections is None:
+        raise ValueError("iodata API response missing 'nodes_data' or 'connections'")
+    
+    # Normalize accumulated rate values when a timeframe is specified.
+    # The iodata API with graph=True sums rate fields (bw, iops) across all data points
+    # (1 per minute) instead of averaging. Divide by minutes to get average rates.
+    timeframe_minutes = 1.0
+    if timeframe:
+        try:
+            timeframe_seconds = parse_time_duration(timeframe)
+            timeframe_minutes = max(timeframe_seconds / 60.0, 1.0)
+        except (ValueError, TypeError):
+            timeframe_minutes = 1.0
+    elif start_time and end_time:
+        try:
+            from datetime import datetime
+            st = datetime.fromisoformat(start_time.replace('Z', '+00:00'))
+            et = datetime.fromisoformat(end_time.replace('Z', '+00:00'))
+            delta_seconds = (et - st).total_seconds()
+            if delta_seconds > 0:
+                timeframe_minutes = max(delta_seconds / 60.0, 1.0)
+        except (ValueError, TypeError):
+            timeframe_minutes = 1.0
+
+    if timeframe_minutes > 1:
+        logging.debug(f"Normalizing iodata rate fields by {timeframe_minutes:.1f} minutes")
+        nodes_data = _dataflow_normalize_nodes(nodes_data, timeframe_minutes)
+    
+    timestamp = data.get("timestamp") or data.get("min_timestamp") or ""
+    
+    # Build client-side column filters
+    column_filters = {}
+    if filter_user is not None:
+        column_filters["user"] = filter_user
+    if filter_host is not None:
+        column_filters["host"] = filter_host
+    if filter_tenant is not None:
+        column_filters["tenant"] = filter_tenant
+    if filter_view is not None:
+        column_filters["view"] = filter_view
+    if filter_vip is not None:
+        column_filters["vip"] = filter_vip
+    if filter_vippool is not None:
+        column_filters["vippool"] = filter_vippool
+    if filter_cnode is not None:
+        column_filters["cnode"] = filter_cnode
+    
+    # Build, filter, and consolidate rows
+    rows = _dataflow_build_rows(nodes_data, connections, column_filters)
+    consolidated = _dataflow_consolidate_rows(rows)
+    
+    # Format output
+    dataflow_table = _dataflow_format_table(consolidated, show_vips=show_vips)
+    mermaid_diagram = _dataflow_generate_mermaid(consolidated, nodes_data=nodes_data, connections=connections, show_vips=show_vips, top_n=top_n_diagram)
+    
+    logging.info(f"Dataflow query returned {len(dataflow_table)} rows")
+    
+    return {
+        "timestamp": timestamp,
+        "dataflow": dataflow_table,
+        "mermaid_diagram": mermaid_diagram,
+    }
 

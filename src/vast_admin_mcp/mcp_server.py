@@ -1,16 +1,31 @@
 """MCP server tools for vast-admin-mcp."""
 
+import json
 import logging
 import os
 import types
 from typing import Optional, List, Dict, Any
 
 from fastmcp import FastMCP
+from mcp.types import TextContent
+from fastmcp.tools.tool import ToolResult
+
+
+def _make_result(data: Any) -> ToolResult:
+    """Wrap tool output in a ToolResult with text-only content (no structuredContent).
+    
+    This prevents FastMCP from emitting duplicate output (compact JSON text +
+    structured JSON) in the MCP response, which causes VS Code and other MCP
+    clients to display the same data twice.
+    """
+    text = json.dumps(data, default=str) if not isinstance(data, str) else data
+    return ToolResult(content=[TextContent(type="text", text=text)])
 
 from .functions import (
-    list_clusters, list_performance, list_performance_graph, list_monitors, list_dynamic, list_view_instances, list_fields, describe_tool, query_users
+    list_clusters, list_performance, list_performance_graph, list_monitors, list_dynamic, list_view_instances, list_fields, describe_tool, query_users,
+    list_dataflow
 )
-from .config import TEMPLATE_MODIFICATIONS_FILE, get_default_template_path
+from .config import TEMPLATE_MODIFICATIONS_FILE, get_default_template_path, DATAFLOW_DEFAULT_TOP_N_DIAGRAM
 from .template_parser import TemplateParser
 
 # Import create functions (only used when read_write=True)
@@ -39,7 +54,7 @@ def start_mcp(read_write: bool = False):
     @mcp.tool(name="list_clusters_vast", description="Retrieve information about VAST clusters, their status, capacity and usage. IMPORTANT: Call this tool FIRST when you need to query 'all clusters' or discover available cluster names before using other tools like list_views_vast.")
     async def list_clusters_mcp(
         clusters: str = ''
-    ) -> list:
+    ):
         """
         Use this tool to retrieve a list of all clusters monitored under the same VMS.
         
@@ -58,7 +73,7 @@ def start_mcp(read_write: bool = False):
             clusters_result = list_clusters(
                 clusters=clusters if clusters else None
             )
-            return clusters_result
+            return _make_result(clusters_result)
         except Exception as e:
             logging.error(f"Error listing clusters: {e}")
             raise
@@ -69,7 +84,7 @@ def start_mcp(read_write: bool = False):
         cluster: str,
         timeframe: Optional[str] = '5m',
         instances: str = ''
-    ) -> Dict:
+    ):
         """
         Use this tool to retrieve performance metrics for VAST cluster objects using the ad_hoc_query API.
 
@@ -112,16 +127,274 @@ def start_mcp(read_write: bool = False):
                 instances=instances or None
             )
 
-            return performance_data
+            return _make_result(performance_data)
         except Exception as e:
             logging.error(f"Error listing performance metrics: {e}")
+            raise
+
+    @mcp.tool(name="list_dataflow_vast", description="Show dataflow analytics as tabular data: how hosts communicate with VAST components (views, VIPs, cnodes). Returns timestamp and a table of traffic flows with bandwidth and IOPS. For a visual topology diagram, use list_dataflow_diagram_vast instead.")
+    async def list_dataflow_mcp(
+        cluster: str,
+        timeframe: Optional[str] = None,
+        start_time: Optional[str] = None,
+        end_time: Optional[str] = None,
+        protocol_filter: Optional[str] = None,
+        sort_by: str = 'bw',
+        sort_type: str = 'total',
+        limit: int = 200,
+        results_num: int = 100,
+        filter_user: Optional[str] = None,
+        filter_host: Optional[str] = None,
+        filter_tenant: Optional[str] = None,
+        filter_viewpath: Optional[str] = None,
+        filter_vip: Optional[str] = None,
+        filter_vippool: Optional[str] = None,
+        filter_cnode: Optional[str] = None,
+        show_vips: bool = False,
+    ):
+        """
+        Retrieve dataflow analytics TABLE from the VAST iodata API.
+        Shows how hosts, users, VIPs, views, vippools, and cnodes are connected,
+        along with bandwidth (BW) and IOPS metrics for each view.
+
+        This tool returns TABULAR DATA only (no diagram).
+        For a visual Mermaid topology diagram, use list_dataflow_diagram_vast instead.
+
+        Time filtering: Use EITHER 'timeframe' for relative windows (e.g., "10m", "1h") OR
+        'start_time'/'end_time' for absolute ISO ranges. Do NOT use both.
+
+        IMPORTANT: filter_viewpath requires the view PATH (e.g., "/data/share1", "/volumes/abc"), NOT the view name.
+        View paths always start with "/". If a plain name is given without "/" it will be auto-prefixed with "/".
+        Use list_views_vast() to find the correct path for a specific view if needed.
+
+        filter_viewpath has dual behavior:
+        - With wildcards (*, ?, !): Fetches all data and filters client-side. E.g., "*myshare*", "!/data*".
+        - Without wildcards (plain path): Pushes the filter to the API for exact server-side matching. E.g., "/data/share1". This is more efficient for exact lookups.
+
+        Args:
+            cluster (str): Target cluster address or name (required). Use list_clusters_vast() first to discover available cluster names.
+            timeframe (str): Relative time window (e.g., "5m", "10m", "1h", "24h", "7d"). Default is realtime when not provided. Mutually exclusive with start_time/end_time.
+            start_time (str): Absolute start of time range in ISO 8601 format (e.g., "2025-02-16T10:00:00.000Z"). Mutually exclusive with timeframe.
+            end_time (str): Absolute end of time range in ISO 8601 format (e.g., "2025-02-16T10:00:00.000Z"). Mutually exclusive with timeframe.
+            protocol_filter (str): Filter by protocol. Must be one of: NFS, NFS4, S3, SMB. Leave empty for all protocols.
+            sort_by (str): API sort field (default: "bw"). Common values: bw, read_bw, write_bw.
+            sort_type (str): API sort type (default: "total").
+            limit (int): API result limit (default: 200).
+            results_num (int): API results_num (default: 100).
+            filter_user (str): Wildcard filter for User column. You MUST include wildcard characters (* or ?) for pattern matching — without them the value is treated as an exact match. Examples: "root" (exact match), "10.*" (starts with "10."), "*admin*" (contains "admin"), "*smith" (ends with "smith"), "!*test*" (does NOT contain "test"), "*" (any non-empty value). Returns all if not specified.
+            filter_host (str): Wildcard filter for Host column. You MUST include wildcard characters (* or ?) for pattern matching — without them the value is treated as an exact match. Examples: "10.0.0.1" (exact match), "10.*" (starts with "10."), "*100*" (contains "100"), "!*192*" (does NOT contain "192"), "*" (any non-empty value). Returns all if not specified.
+            filter_tenant (str): Wildcard filter for Tenant column. You MUST include wildcard characters (* or ?) for pattern matching — without them the value is treated as an exact match. Examples: "default" (exact match), "prod*" (starts with "prod"), "*test*" (contains "test"), "*" (any non-empty value). Returns all if not specified.
+            filter_viewpath (str): Filter for View PATH — MUST be a path (starting with "/"), NOT a view name. View paths always start with "/"; if a plain name without "/" is given it is auto-prefixed. You MUST include wildcard characters (* or ?) for pattern matching — without them the value is treated as an exact path and pushed to the API. Examples: "/data/share1" (exact path, API pushdown), "*logs*" (contains "logs", client-side), "/data/*" (starts with "/data/", client-side), "!*/temp*" (does NOT contain "/temp", client-side), "*" (any non-empty value). Returns all if not specified.
+            filter_vip (str): Wildcard filter for VIP column. You MUST include wildcard characters (* or ?) for pattern matching — without them the value is treated as an exact match. Examples: "10.0.0.1" (exact match), "10.33.*" (starts with "10.33."), "*" (any non-empty value). Returns all if not specified.
+            filter_vippool (str): Wildcard filter for Vippool column. You MUST include wildcard characters (* or ?) for pattern matching — without them the value is treated as an exact match. Examples: "pool1" (exact match), "*replication*" (contains "replication"), "*" (any non-empty value). Returns all if not specified.
+            filter_cnode (str): Wildcard filter for Cnode column. You MUST include wildcard characters (* or ?) for pattern matching — without them the value is treated as an exact match. Examples: "cnode-1" (exact match), "cnode-130*" (starts with "cnode-130"), "*" (any non-empty value). Returns all if not specified.
+            show_vips (bool): If True, include VIP column in the table output. Default: False.
+
+        Returns:
+            A JSON object with the following fields:
+
+            - timestamp (str): ISO 8601 timestamp of the data snapshot (e.g., "2026-02-12T17:29:52Z").
+
+            - dataflow (list[dict]): A list of rows, each representing a unique traffic flow.
+              Each row contains:
+                - Tenant (str): Tenant name or ID.
+                - View (str): The view path (e.g., "/data/share1").
+                - Users (str): User name and UID (e.g., "root (0)").
+                - Hosts (str): Client host IP address.
+                - Vippool (str): VIP pool name.
+                - Cnodes (str): CNode name handling the traffic.
+                - BW (str): Human-readable bandwidth rate (e.g., "1.99 GB/s", "25.78 MB/s").
+                - RD_IOPS (int): Read IOPS.
+                - WR_IOPS (int): Write IOPS.
+                - VIP (str): VIP address (only present when show_vips=True).
+              Present this data as a markdown TABLE to the user.
+
+        Examples:
+            - Get current dataflow for cluster: cluster="vast3115-var"
+            - Get dataflow for last hour: cluster="vast3115-var", timeframe="1h"
+            - Get NFS traffic only: cluster="vast3115-var", protocol_filter="NFS"
+            - Find hosts using a view path pattern: cluster="vast3115-var", filter_viewpath="*myshare*"
+            - Get exact view path (API pushdown): cluster="vast3115-var", filter_viewpath="/data/share1"
+            - Get dataflow for absolute time range: cluster="vast3115-var", start_time="2025-02-16T10:00:00.000Z", end_time="2025-02-16T12:00:00.000Z"
+            - Get S3 traffic for a specific view path: cluster="vast3115-var", protocol_filter="S3", filter_viewpath="/data/bucket1"
+        """
+        try:
+            # Smart routing for filter_viewpath: wildcards → client-side, plain path → API pushdown
+            # Auto-prefix "/" for non-wildcarded values that don't start with "/"
+            api_view_filter = None
+            client_view_filter = None
+            if filter_viewpath:
+                if any(c in filter_viewpath for c in ('*', '?', '!')):
+                    client_view_filter = filter_viewpath
+                else:
+                    if not filter_viewpath.startswith('/'):
+                        filter_viewpath = '/' + filter_viewpath
+                    api_view_filter = filter_viewpath
+
+            dataflow_data = list_dataflow(
+                cluster=cluster,
+                view_filter=api_view_filter,
+                timeframe=timeframe or None,
+                start_time=start_time or None,
+                end_time=end_time or None,
+                protocol_filter=protocol_filter or None,
+                sort_by=sort_by,
+                sort_type=sort_type,
+                limit=limit,
+                results_num=results_num,
+                filter_user=filter_user or None,
+                filter_host=filter_host or None,
+                filter_tenant=filter_tenant or None,
+                filter_view=client_view_filter,
+                filter_vip=filter_vip or None,
+                filter_vippool=filter_vippool or None,
+                filter_cnode=filter_cnode or None,
+                show_vips=show_vips,
+            )
+
+            # Remove mermaid_diagram — use list_dataflow_diagram_vast for diagrams
+            dataflow_data.pop("mermaid_diagram", None)
+
+            return _make_result(dataflow_data)
+        except Exception as e:
+            logging.error(f"Error listing dataflow: {e}")
+            raise
+
+    @mcp.tool(name="list_dataflow_diagram_vast", description="Show dataflow topology as a visual Mermaid diagram: Hosts -> CNodes -> Views with bandwidth and IOPS labels. Returns a ready-to-render Mermaid diagram. For tabular data, use list_dataflow_vast instead.")
+    async def list_dataflow_diagram_mcp(
+        cluster: str,
+        timeframe: Optional[str] = None,
+        start_time: Optional[str] = None,
+        end_time: Optional[str] = None,
+        protocol_filter: Optional[str] = None,
+        sort_by: str = 'bw',
+        sort_type: str = 'total',
+        limit: int = 200,
+        results_num: int = 100,
+        filter_user: Optional[str] = None,
+        filter_host: Optional[str] = None,
+        filter_tenant: Optional[str] = None,
+        filter_viewpath: Optional[str] = None,
+        filter_vip: Optional[str] = None,
+        filter_vippool: Optional[str] = None,
+        filter_cnode: Optional[str] = None,
+        top_n_diagram: int = DATAFLOW_DEFAULT_TOP_N_DIAGRAM,
+    ):
+        """
+        Retrieve a dataflow topology DIAGRAM from the VAST iodata API as a Mermaid graph.
+        Shows the visual topology: Hosts -> CNodes -> Views, with bandwidth and IOPS labels.
+
+        This tool returns a Mermaid diagram ONLY (no table data).
+        For tabular dataflow data, use list_dataflow_vast instead.
+
+        Time filtering: Use EITHER 'timeframe' for relative windows (e.g., "10m", "1h") OR
+        'start_time'/'end_time' for absolute ISO ranges. Do NOT use both.
+
+        IMPORTANT: filter_viewpath requires the view PATH (e.g., "/data/share1", "/volumes/abc"), NOT the view name.
+        View paths always start with "/". If a plain name is given without "/" it will be auto-prefixed with "/".
+        Use list_views_vast() to find the correct path for a specific view if needed.
+
+        filter_viewpath has dual behavior:
+        - With wildcards (*, ?, !): Fetches all data and filters client-side. E.g., "*myshare*", "!/data*".
+        - Without wildcards (plain path): Pushes the filter to the API for exact server-side matching. E.g., "/data/share1". This is more efficient for exact lookups.
+
+        Args:
+            cluster (str): Target cluster address or name (required). Use list_clusters_vast() first to discover available cluster names.
+            timeframe (str): Relative time window (e.g., "5m", "10m", "1h", "24h", "7d"). Default is realtime when not provided. Mutually exclusive with start_time/end_time.
+            start_time (str): Absolute start of time range in ISO 8601 format (e.g., "2025-02-16T10:00:00.000Z"). Mutually exclusive with timeframe.
+            end_time (str): Absolute end of time range in ISO 8601 format (e.g., "2025-02-16T10:00:00.000Z"). Mutually exclusive with timeframe.
+            protocol_filter (str): Filter by protocol. Must be one of: NFS, NFS4, S3, SMB. Leave empty for all protocols.
+            sort_by (str): API sort field (default: "bw"). Common values: bw, read_bw, write_bw.
+            sort_type (str): API sort type (default: "total").
+            limit (int): API result limit (default: 200).
+            results_num (int): API results_num (default: 100).
+            filter_user (str): Wildcard filter for User column. You MUST include wildcard characters (* or ?) for pattern matching — without them the value is treated as an exact match. Examples: "root" (exact match), "10.*" (starts with "10."), "*admin*" (contains "admin"), "*smith" (ends with "smith"), "!*test*" (does NOT contain "test"), "*" (any non-empty value). Returns all if not specified.
+            filter_host (str): Wildcard filter for Host column. You MUST include wildcard characters (* or ?) for pattern matching — without them the value is treated as an exact match. Examples: "10.0.0.1" (exact match), "10.*" (starts with "10."), "*100*" (contains "100"), "!*192*" (does NOT contain "192"), "*" (any non-empty value). Returns all if not specified.
+            filter_tenant (str): Wildcard filter for Tenant column. You MUST include wildcard characters (* or ?) for pattern matching — without them the value is treated as an exact match. Examples: "default" (exact match), "prod*" (starts with "prod"), "*test*" (contains "test"), "*" (any non-empty value). Returns all if not specified.
+            filter_viewpath (str): Filter for View PATH — MUST be a path (starting with "/"), NOT a view name. View paths always start with "/"; if a plain name without "/" is given it is auto-prefixed. You MUST include wildcard characters (* or ?) for pattern matching — without them the value is treated as an exact path and pushed to the API. Examples: "/data/share1" (exact path, API pushdown), "*logs*" (contains "logs", client-side), "/data/*" (starts with "/data/", client-side), "!*/temp*" (does NOT contain "/temp", client-side), "*" (any non-empty value). Returns all if not specified.
+            filter_vip (str): Wildcard filter for VIP column. You MUST include wildcard characters (* or ?) for pattern matching — without them the value is treated as an exact match. Examples: "10.0.0.1" (exact match), "10.33.*" (starts with "10.33."), "*" (any non-empty value). Returns all if not specified.
+            filter_vippool (str): Wildcard filter for Vippool column. You MUST include wildcard characters (* or ?) for pattern matching — without them the value is treated as an exact match. Examples: "pool1" (exact match), "*replication*" (contains "replication"), "*" (any non-empty value). Returns all if not specified.
+            filter_cnode (str): Wildcard filter for Cnode column. You MUST include wildcard characters (* or ?) for pattern matching — without them the value is treated as an exact match. Examples: "cnode-1" (exact match), "cnode-130*" (starts with "cnode-130"), "*" (any non-empty value). Returns all if not specified.
+            top_n_diagram (int): Maximum number of hosts and views to show in the diagram, ranked by bandwidth. When there are more hosts or views than this limit, only the top N by BW are shown and a summary node indicates how many more exist (e.g., "... and 123 more hosts"). Set to 0 for no limit. Default: 5.
+
+        Returns:
+            A JSON object with the following fields:
+
+            - timestamp (str): ISO 8601 timestamp of the data snapshot (e.g., "2026-02-12T17:29:52Z").
+
+            - mermaid_diagram (str): A ready-to-render Mermaid diagram string already wrapped
+              in a ```mermaid fenced code block. The diagram shows the dataflow topology:
+              Hosts -> CNodes -> Views, with bandwidth and IOPS labels on each node.
+              When top_n_diagram is set, only the top N hosts and views (by BW) are shown,
+              with summary nodes for the remainder.
+
+              DISPLAY INSTRUCTIONS: Copy the mermaid_diagram value EXACTLY as-is into your
+              response. It is already formatted as a ```mermaid fenced code block and will
+              render as a visual diagram. Do NOT unwrap, modify, or regenerate it.
+
+        Examples:
+            - Get diagram for cluster: cluster="vast3115-var"
+            - Get diagram for last hour: cluster="vast3115-var", timeframe="1h"
+            - Get NFS topology: cluster="vast3115-var", protocol_filter="NFS"
+            - Diagram for view path pattern: cluster="vast3115-var", filter_viewpath="*myshare*"
+            - Diagram for exact view path (API pushdown): cluster="vast3115-var", filter_viewpath="/data/share1"
+            - Show all hosts/views (no limit): cluster="vast3115-var", top_n_diagram=0
+            - Show top 10 hosts/views: cluster="vast3115-var", top_n_diagram=10
+        """
+        try:
+            # Smart routing for filter_viewpath: wildcards → client-side, plain path → API pushdown
+            # Auto-prefix "/" for non-wildcarded values that don't start with "/"
+            api_view_filter = None
+            client_view_filter = None
+            if filter_viewpath:
+                if any(c in filter_viewpath for c in ('*', '?', '!')):
+                    client_view_filter = filter_viewpath
+                else:
+                    if not filter_viewpath.startswith('/'):
+                        filter_viewpath = '/' + filter_viewpath
+                    api_view_filter = filter_viewpath
+
+            dataflow_data = list_dataflow(
+                cluster=cluster,
+                view_filter=api_view_filter,
+                timeframe=timeframe or None,
+                start_time=start_time or None,
+                end_time=end_time or None,
+                protocol_filter=protocol_filter or None,
+                sort_by=sort_by,
+                sort_type=sort_type,
+                limit=limit,
+                results_num=results_num,
+                filter_user=filter_user or None,
+                filter_host=filter_host or None,
+                filter_tenant=filter_tenant or None,
+                filter_view=client_view_filter,
+                filter_vip=filter_vip or None,
+                filter_vippool=filter_vippool or None,
+                filter_cnode=filter_cnode or None,
+                show_vips=False,
+                top_n_diagram=top_n_diagram,
+            )
+
+            mermaid_raw = dataflow_data.get("mermaid_diagram", "")
+
+            if not mermaid_raw:
+                return ToolResult(
+                    content=[TextContent(type="text", text="No dataflow data found.")],
+                )
+
+            return ToolResult(
+                content=[TextContent(type="text", text=f"```mermaid\n{mermaid_raw}\n```")],
+            )
+        except Exception as e:
+            logging.error(f"Error listing dataflow diagram: {e}")
             raise
 
     @mcp.tool(name="list_monitors_vast", description="List all available predefined monitors for performance graphs")
     async def list_monitors_mcp(
         cluster: str,
         object_type: str = ''
-    ) -> List[Dict]:
+    ):
         """
         List all available predefined monitors that can be used for performance graphs.
         
@@ -151,7 +424,7 @@ def start_mcp(read_write: bool = False):
                 cluster=cluster,
                 object_type=object_type or None
             )
-            return monitors
+            return _make_result(monitors)
         except Exception as e:
             logging.error(f"Error listing monitors: {e}")
             raise
@@ -164,7 +437,7 @@ def start_mcp(read_write: bool = False):
         instances: str = '',
         object_name: str = '',
         format: str = 'png'
-    ) -> Dict[str, Any]:
+    ):
         """
         Generate a time-series performance graph using a predefined VAST monitor.
         
@@ -216,7 +489,7 @@ def start_mcp(read_write: bool = False):
                 object_name=object_name or None,
                 format=format or 'png'
             )
-            return graph_data
+            return _make_result(graph_data)
         except Exception as e:
             logging.error(f"Error generating performance graph: {e}")
             raise
@@ -227,7 +500,7 @@ def start_mcp(read_write: bool = False):
         tenant: str = '',
         name: str = '',
         path: str = ''
-    ) -> list:
+    ):
         """
         List view instances to help discover available views.
         
@@ -255,7 +528,7 @@ def start_mcp(read_write: bool = False):
                 name=name if name else None,
                 path=path if path else None
             )
-            return result
+            return _make_result(result)
         except Exception as e:
             logging.error(f"Error listing view instances: {e}")
             raise
@@ -263,7 +536,7 @@ def start_mcp(read_write: bool = False):
     @mcp.tool(name="list_fields_vast", description="Get available fields for a command with types, units, and sortable/filterable metadata")
     async def list_fields_mcp(
         command_name: str
-    ) -> Dict:
+    ):
         """
         Get available fields for a command with metadata.
         
@@ -287,7 +560,7 @@ def start_mcp(read_write: bool = False):
         """
         try:
             result = list_fields(command_name=command_name)
-            return result
+            return _make_result(result)
         except Exception as e:
             logging.error(f"Error listing fields: {e}")
             raise
@@ -295,7 +568,7 @@ def start_mcp(read_write: bool = False):
     @mcp.tool(name="describe_tool_vast", description="Get tool schema with examples, defaults, and accepted formats for any tool")
     async def describe_tool_mcp(
         tool_name: str
-    ) -> Dict:
+    ):
         """
         Get tool schema with examples and accepted formats.
         
@@ -324,7 +597,7 @@ def start_mcp(read_write: bool = False):
         """
         try:
             result = describe_tool(tool_name=tool_name)
-            return result
+            return _make_result(result)
         except Exception as e:
             logging.error(f"Error describing tool: {e}")
             raise
@@ -336,7 +609,7 @@ def start_mcp(read_write: bool = False):
             tenant: str = 'default',
             prefix: str = '',
             top: Optional[int] = 20
-        ) -> List[Dict]:
+        ):
             """
             Query user names from VAST cluster using users/names endpoint.
             
@@ -375,7 +648,7 @@ def start_mcp(read_write: bool = False):
                     prefix=prefix,
                     top=top or 20
                 )
-                return users_data
+                return _make_result(users_data)
             except Exception as e:
                 logging.error(f"Error querying users: {e}")
                 raise
@@ -636,7 +909,7 @@ def start_mcp(read_write: bool = False):
                     # First escape backslashes, then escape braces for f-string
                     escaped_docstring = docstring.replace('\\', '\\\\').replace('{', '{{').replace('}', '}}')
                     
-                    func_code = f"""async def {tool_name}_func({func_params_with_mcp}) -> List[Dict]:
+                    func_code = f"""async def {tool_name}_func({func_params_with_mcp}):
     \"\"\"{escaped_docstring}\"\"\"
     # Debug mode: show MCP tool structure and description
     if mcp:
@@ -661,7 +934,7 @@ def start_mcp(read_write: bool = False):
     try:
         from vast_admin_mcp.functions import list_dynamic
         results = list_dynamic('{command_name}', **kwargs)
-        return results
+        return _make_result(results)
     except Exception as e:
         import logging
         logging.error(f"Error executing {command_name}: {{e}}")
@@ -672,7 +945,8 @@ def start_mcp(read_write: bool = False):
                     exec_namespace = {
                         'List': List,
                         'Dict': Dict,
-                        'logging': logging
+                        'logging': logging,
+                        '_make_result': _make_result
                     }
                     exec(func_code, exec_namespace)
                     
@@ -889,7 +1163,7 @@ def start_mcp(read_write: bool = False):
                 # Escape backslashes in docstring to prevent invalid escape sequence warnings
                 escaped_docstring = docstring.replace('\\', '\\\\').replace('{', '{{').replace('}', '}}')
                 
-                func_code = f"""async def {tool_name}_func({func_params_with_mcp}) -> List[Dict]:
+                func_code = f"""async def {tool_name}_func({func_params_with_mcp}):
     \"\"\"{escaped_docstring}\"\"\"
     # Debug mode: show MCP tool structure and description
     if mcp:
@@ -913,7 +1187,7 @@ def start_mcp(read_write: bool = False):
     try:
         from vast_admin_mcp.functions import list_merged
         results = list_merged('{merged_name}', **kwargs)
-        return results
+        return _make_result(results)
     except Exception as e:
         import logging
         logging.error(f"Error executing merged {merged_name}: {{e}}")
@@ -924,7 +1198,8 @@ def start_mcp(read_write: bool = False):
                 exec_namespace = {
                     'List': List,
                     'Dict': Dict,
-                    'logging': logging
+                    'logging': logging,
+                    '_make_result': _make_result
                 }
                 exec(func_code, exec_namespace)
                 
@@ -954,7 +1229,7 @@ def start_mcp(read_write: bool = False):
             policy: str = '',
             hard_quota: str = '',
             qos_policy: str = '',
-        ) -> List[Dict[str, str]]:
+        ):
             """
             Create a view in a VAST cluster. Provide cluster and path at minimum.
 
@@ -987,7 +1262,7 @@ def start_mcp(read_write: bool = False):
                     hard_quota=hard_quota or None,
                     qos_policy=qos_policy or None
                 )
-                return paths
+                return _make_result(paths)
             except Exception as e:
                 logging.error(f"Error creating view: {e}")
                 raise
@@ -996,7 +1271,7 @@ def start_mcp(read_write: bool = False):
         async def create_view_from_template_mcp(
             template: str = '',
             count: int = 1
-        ) -> List[Dict[str, str]]:
+        ):
             """
             Create a view in a VAST cluster based on a predefined template. Templates are defined in the view templates file.
 
@@ -1013,7 +1288,7 @@ def start_mcp(read_write: bool = False):
                     template=template or None,
                     count=count or 1
                 )
-                return paths
+                return _make_result(paths)
             except Exception as e:
                 logging.error(f"Error creating view from template: {e}")
                 raise
@@ -1027,7 +1302,7 @@ def start_mcp(read_write: bool = False):
             expiry_time: str = '',
             indestructible: bool = False,
             create_with_timestamp: bool = False
-        ) -> Dict[str, Any]:
+        ):
             """
             Create a snapshot for a view in a VAST cluster.
 
@@ -1054,7 +1329,7 @@ def start_mcp(read_write: bool = False):
                     indestructible=indestructible or False,
                     create_with_timestamp=create_with_timestamp or False
                 )
-                return result
+                return _make_result(result)
             except Exception as e:
                 logging.error(f"Error creating snapshot: {e}")
                 raise
@@ -1068,7 +1343,7 @@ def start_mcp(read_write: bool = False):
             destination_tenant: str = '',
             destination_path: str = '',
             refresh: bool = False
-        ) -> List[Dict[str, str]]:
+        ):
             """
             Create a clone from a snapshot in a VAST cluster.
 
@@ -1096,7 +1371,7 @@ def start_mcp(read_write: bool = False):
                     destination_path=destination_path or None,
                     refresh=refresh or False
                 )
-                return result
+                return _make_result(result)
             except Exception as e:
                 logging.error(f"Error creating clone: {e}")
                 raise
@@ -1111,7 +1386,7 @@ def start_mcp(read_write: bool = False):
             files_hard_limit: Optional[int] = None,
             files_soft_limit: Optional[int] = None,
             grace_period: Optional[int] = None
-        ) -> Dict[str, Any]:
+        ):
             """
             Use this tool to create or update quota for a specific path and tenant on a VAST cluster. This operation requires read-write mode.
 
@@ -1142,7 +1417,7 @@ def start_mcp(read_write: bool = False):
                     grace_period=grace_period
                 )
 
-                return result
+                return _make_result(result)
             except Exception as e:
                 logging.error(f"Error creating/updating quota: {e}")
                 raise

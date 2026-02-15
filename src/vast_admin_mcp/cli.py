@@ -9,7 +9,7 @@ from .mcp_server import start_mcp
 from .setup import setup_config
 from .utils import output_results, logging_main, to_cli_name, handle_errors
 from .template_parser import TemplateParser
-from .functions import list_dynamic, list_merged, list_clusters, list_performance, list_performance_graph, list_monitors, list_view_instances, list_fields, describe_tool, query_users
+from .functions import list_dynamic, list_merged, list_clusters, list_performance, list_performance_graph, list_monitors, list_view_instances, list_fields, describe_tool, query_users, list_dataflow
 from .create_functions import create_view, create_view_from_template, create_snapshot, create_clone, create_quota
 
 
@@ -385,6 +385,83 @@ def handle_performance_command(args):
         sys.exit(1)
 
 
+def handle_dataflow_command(args):
+    """Handle dataflow command"""
+    logging_main(debug=args.debug)
+    
+    # Handle --mcp flag for debug output
+    if args.mcp:
+        python_code = _generate_dataflow_mcp_code()
+        print(python_code)
+        return
+    
+    if not args.cluster:
+        print("Error: --cluster/-c is required", file=sys.stderr)
+        sys.exit(1)
+    
+    try:
+        # Smart routing for filter_viewpath: wildcards → client-side, plain path → API pushdown
+        # Auto-prefix "/" for non-wildcarded values that don't start with "/"
+        api_view_filter = None
+        client_view_filter = None
+        if args.filter_viewpath:
+            if any(c in args.filter_viewpath for c in ('*', '?', '!')):
+                client_view_filter = args.filter_viewpath
+            else:
+                view_val = args.filter_viewpath if args.filter_viewpath.startswith('/') else '/' + args.filter_viewpath
+                api_view_filter = view_val
+
+        results = list_dataflow(
+            cluster=args.cluster,
+            view_filter=api_view_filter,
+            timeframe=args.timeframe,
+            start_time=args.start_time,
+            end_time=args.end_time,
+            protocol_filter=args.protocol_filter,
+            sort_by=args.sort_by,
+            sort_type=args.sort_type,
+            limit=args.limit,
+            results_num=args.results_num,
+            filter_user=args.filter_user,
+            filter_host=args.filter_host,
+            filter_tenant=args.filter_tenant,
+            filter_view=client_view_filter,
+            filter_vip=args.filter_vip,
+            filter_vippool=args.filter_vippool,
+            filter_cnode=args.filter_cnode,
+            show_vips=args.show_vips,
+        )
+        
+        if args.format == 'mermaid':
+            # Mermaid-only output
+            diagram = results.get('mermaid_diagram', '')
+            if diagram:
+                output = f"```mermaid\n{diagram}\n```"
+            else:
+                output = "No dataflow diagram available (0 rows)."
+            if args.output:
+                with open(args.output, 'w') as f:
+                    f.write(output)
+                print(f"Output written to {args.output}")
+            else:
+                print(output)
+        elif args.format in ('table', 'csv'):
+            timestamp = results.get('timestamp', '')
+            if timestamp:
+                print(f"Data timestamp: {timestamp}\n")
+            output_results(results.get('dataflow', []), format=args.format, output_file=args.output)
+        else:
+            # JSON: output the full result including mermaid
+            output_results(results, format=args.format, output_file=args.output)
+        
+    except Exception as e:
+        print(f"Error executing dataflow command: {e}", file=sys.stderr)
+        if args.debug:
+            import traceback
+            traceback.print_exc()
+        sys.exit(1)
+
+
 def handle_list_monitors_command(args):
     """Handle list-monitors command"""
     logging_main(debug=args.debug)
@@ -728,6 +805,234 @@ def _generate_performance_mcp_code() -> str:
 '''
 
 
+def _generate_dataflow_mcp_code() -> str:
+    """Generate Python code representation of list_dataflow and list_dataflow_diagram MCP functions"""
+    return '''    @mcp.tool(name="list_dataflow_vast", description="Show dataflow analytics as tabular data: how hosts communicate with VAST components (views, VIPs, cnodes). Returns timestamp and a table of traffic flows with bandwidth and IOPS. For a visual topology diagram, use list_dataflow_diagram_vast instead.")
+    async def list_dataflow_mcp(
+        cluster: str,
+        timeframe: Optional[str] = None,
+        start_time: Optional[str] = None,
+        end_time: Optional[str] = None,
+        protocol_filter: Optional[str] = None,
+        sort_by: str = 'bw',
+        sort_type: str = 'total',
+        limit: int = 200,
+        results_num: int = 100,
+        filter_user: Optional[str] = None,
+        filter_host: Optional[str] = None,
+        filter_tenant: Optional[str] = None,
+        filter_viewpath: Optional[str] = None,
+        filter_vip: Optional[str] = None,
+        filter_vippool: Optional[str] = None,
+        filter_cnode: Optional[str] = None,
+        show_vips: bool = False,
+    ) -> Dict:
+        """
+        Retrieve dataflow analytics TABLE from the VAST iodata API.
+        Shows how hosts, users, VIPs, views, vippools, and cnodes are connected,
+        along with bandwidth (BW) and IOPS metrics.
+
+        This tool returns TABULAR DATA only (no diagram).
+        For a visual Mermaid topology diagram, use list_dataflow_diagram_vast instead.
+
+        IMPORTANT: filter_viewpath requires the view PATH (e.g., "/data/share1", "/volumes/abc"), NOT the view name.
+        View paths always start with "/". If a plain name is given without "/" it will be auto-prefixed with "/".
+        Use list_views_vast() to find the correct path for a specific view if needed.
+
+        filter_viewpath has dual behavior:
+        - With wildcards (*, ?, !): Fetches all data and filters client-side. E.g., "*myshare*", "!/data*".
+        - Without wildcards (plain path): Pushes the filter to the API for exact server-side matching. E.g., "/data/share1". This is more efficient for exact lookups.
+
+        Args:
+            cluster (str): Target cluster address or name (required).
+            timeframe (str): Relative time window (e.g., "5m", "1h", "24h"). Default is realtime. Mutually exclusive with start_time/end_time.
+            start_time (str): Absolute start of time range in ISO 8601 format. Mutually exclusive with timeframe.
+            end_time (str): Absolute end of time range in ISO 8601 format. Mutually exclusive with timeframe.
+            protocol_filter (str): Filter by protocol: NFS, NFS4, S3, or SMB.
+            sort_by (str): API sort field (default: "bw").
+            sort_type (str): API sort type (default: "total").
+            limit (int): API result limit (default: 200).
+            results_num (int): API results_num (default: 100).
+            filter_user (str): Wildcard filter for User column. You MUST include wildcard characters (* or ?) for pattern matching — without them the value is treated as an exact match. Examples: "root" (exact match), "10.*" (starts with "10."), "*admin*" (contains "admin"), "*smith" (ends with "smith"), "!*test*" (does NOT contain "test"), "*" (any non-empty value). Returns all if not specified.
+            filter_host (str): Wildcard filter for Host column. You MUST include wildcard characters (* or ?) for pattern matching — without them the value is treated as an exact match. Examples: "10.0.0.1" (exact match), "10.*" (starts with "10."), "*100*" (contains "100"), "!*192*" (does NOT contain "192"), "*" (any non-empty value). Returns all if not specified.
+            filter_tenant (str): Wildcard filter for Tenant column. You MUST include wildcard characters (* or ?) for pattern matching — without them the value is treated as an exact match. Examples: "default" (exact match), "prod*" (starts with "prod"), "*test*" (contains "test"), "*" (any non-empty value). Returns all if not specified.
+            filter_viewpath (str): Filter for View PATH — MUST be a path (starting with "/"), NOT a view name. View paths always start with "/"; if a plain name without "/" is given it is auto-prefixed. You MUST include wildcard characters (* or ?) for pattern matching — without them the value is treated as an exact path and pushed to the API. Examples: "/data/share1" (exact path, API pushdown), "*logs*" (contains "logs", client-side), "/data/*" (starts with "/data/", client-side), "!*/temp*" (does NOT contain "/temp", client-side), "*" (any non-empty value). Returns all if not specified.
+            filter_vip (str): Wildcard filter for VIP column. You MUST include wildcard characters (* or ?) for pattern matching — without them the value is treated as an exact match. Examples: "10.0.0.1" (exact match), "10.33.*" (starts with "10.33."), "*" (any non-empty value). Returns all if not specified.
+            filter_vippool (str): Wildcard filter for Vippool column. You MUST include wildcard characters (* or ?) for pattern matching — without them the value is treated as an exact match. Examples: "pool1" (exact match), "*replication*" (contains "replication"), "*" (any non-empty value). Returns all if not specified.
+            filter_cnode (str): Wildcard filter for Cnode column. You MUST include wildcard characters (* or ?) for pattern matching — without them the value is treated as an exact match. Examples: "cnode-1" (exact match), "cnode-130*" (starts with "cnode-130"), "*" (any non-empty value). Returns all if not specified.
+            show_vips (bool): If True, include VIP column in table output. Default: False.
+
+        Returns:
+            A JSON object with the following fields:
+
+            - timestamp (str): ISO 8601 timestamp of the data snapshot (e.g., "2026-02-12T17:29:52Z").
+
+            - dataflow (list[dict]): A list of rows, each representing a unique traffic flow.
+              Each row contains:
+                - Tenant (str): Tenant name or ID.
+                - View (str): The view path (e.g., "/data/share1").
+                - Users (str): User name and UID (e.g., "root (0)").
+                - Hosts (str): Client host IP address.
+                - Vippool (str): VIP pool name.
+                - Cnodes (str): CNode name handling the traffic.
+                - BW (str): Human-readable bandwidth rate (e.g., "1.99 GB/s", "25.78 MB/s").
+                - RD_IOPS (int): Read IOPS.
+                - WR_IOPS (int): Write IOPS.
+                - VIP (str): VIP address (only present when show_vips=True).
+              Present this data as a markdown TABLE to the user.
+        """
+        try:
+            from vast_admin_mcp.functions import list_dataflow
+            # Smart routing for filter_viewpath: wildcards -> client-side, plain path -> API pushdown
+            # Auto-prefix "/" for non-wildcarded values that don't start with "/"
+            api_view_filter = None
+            client_view_filter = None
+            if filter_viewpath:
+                if any(c in filter_viewpath for c in ('*', '?', '!')):
+                    client_view_filter = filter_viewpath
+                else:
+                    if not filter_viewpath.startswith('/'):
+                        filter_viewpath = '/' + filter_viewpath
+                    api_view_filter = filter_viewpath
+
+            dataflow_data = list_dataflow(
+                cluster=cluster,
+                view_filter=api_view_filter,
+                timeframe=timeframe or None,
+                start_time=start_time or None,
+                end_time=end_time or None,
+                protocol_filter=protocol_filter or None,
+                sort_by=sort_by,
+                sort_type=sort_type,
+                limit=limit,
+                results_num=results_num,
+                filter_user=filter_user or None,
+                filter_host=filter_host or None,
+                filter_tenant=filter_tenant or None,
+                filter_view=client_view_filter,
+                filter_vip=filter_vip or None,
+                filter_vippool=filter_vippool or None,
+                filter_cnode=filter_cnode or None,
+                show_vips=show_vips,
+            )
+            dataflow_data.pop("mermaid_diagram", None)
+            return dataflow_data
+        except Exception as e:
+            import logging
+            logging.error(f"Error listing dataflow: {e}")
+            raise
+
+    @mcp.tool(name="list_dataflow_diagram_vast", description="Show dataflow topology as a visual Mermaid diagram: Hosts -> CNodes -> Views with bandwidth and IOPS labels. Returns a ready-to-render Mermaid diagram. For tabular data, use list_dataflow_vast instead.")
+    async def list_dataflow_diagram_mcp(
+        cluster: str,
+        timeframe: Optional[str] = None,
+        start_time: Optional[str] = None,
+        end_time: Optional[str] = None,
+        protocol_filter: Optional[str] = None,
+        sort_by: str = 'bw',
+        sort_type: str = 'total',
+        limit: int = 200,
+        results_num: int = 100,
+        filter_user: Optional[str] = None,
+        filter_host: Optional[str] = None,
+        filter_tenant: Optional[str] = None,
+        filter_viewpath: Optional[str] = None,
+        filter_vip: Optional[str] = None,
+        filter_vippool: Optional[str] = None,
+        filter_cnode: Optional[str] = None,
+        top_n_diagram: int = 5,
+    ) -> Dict:
+        """
+        Retrieve a dataflow topology DIAGRAM from the VAST iodata API as a Mermaid graph.
+        Shows the visual topology: Hosts -> CNodes -> Views, with bandwidth and IOPS labels.
+
+        This tool returns a Mermaid diagram ONLY (no table data).
+        For tabular dataflow data, use list_dataflow_vast instead.
+
+        IMPORTANT: filter_viewpath requires the view PATH (e.g., "/data/share1", "/volumes/abc"), NOT the view name.
+        View paths always start with "/". If a plain name is given without "/" it will be auto-prefixed with "/".
+        Use list_views_vast() to find the correct path for a specific view if needed.
+
+        filter_viewpath has dual behavior:
+        - With wildcards (*, ?, !): Fetches all data and filters client-side. E.g., "*myshare*", "!/data*".
+        - Without wildcards (plain path): Pushes the filter to the API for exact server-side matching. E.g., "/data/share1". This is more efficient for exact lookups.
+
+        Args:
+            cluster (str): Target cluster address or name (required).
+            timeframe (str): Relative time window (e.g., "5m", "1h", "24h"). Default is realtime. Mutually exclusive with start_time/end_time.
+            start_time (str): Absolute start of time range in ISO 8601 format. Mutually exclusive with timeframe.
+            end_time (str): Absolute end of time range in ISO 8601 format. Mutually exclusive with timeframe.
+            protocol_filter (str): Filter by protocol: NFS, NFS4, S3, or SMB.
+            sort_by (str): API sort field (default: "bw").
+            sort_type (str): API sort type (default: "total").
+            limit (int): API result limit (default: 200).
+            results_num (int): API results_num (default: 100).
+            filter_user (str): Wildcard filter for User column. You MUST include wildcard characters (* or ?) for pattern matching — without them the value is treated as an exact match. Examples: "root" (exact match), "10.*" (starts with "10."), "*admin*" (contains "admin"), "*smith" (ends with "smith"), "!*test*" (does NOT contain "test"), "*" (any non-empty value). Returns all if not specified.
+            filter_host (str): Wildcard filter for Host column. You MUST include wildcard characters (* or ?) for pattern matching — without them the value is treated as an exact match. Examples: "10.0.0.1" (exact match), "10.*" (starts with "10."), "*100*" (contains "100"), "!*192*" (does NOT contain "192"), "*" (any non-empty value). Returns all if not specified.
+            filter_tenant (str): Wildcard filter for Tenant column. You MUST include wildcard characters (* or ?) for pattern matching — without them the value is treated as an exact match. Examples: "default" (exact match), "prod*" (starts with "prod"), "*test*" (contains "test"), "*" (any non-empty value). Returns all if not specified.
+            filter_viewpath (str): Filter for View PATH — MUST be a path (starting with "/"), NOT a view name. View paths always start with "/"; if a plain name without "/" is given it is auto-prefixed. You MUST include wildcard characters (* or ?) for pattern matching — without them the value is treated as an exact path and pushed to the API. Examples: "/data/share1" (exact path, API pushdown), "*logs*" (contains "logs", client-side), "/data/*" (starts with "/data/", client-side), "!*/temp*" (does NOT contain "/temp", client-side), "*" (any non-empty value). Returns all if not specified.
+            filter_vip (str): Wildcard filter for VIP column. You MUST include wildcard characters (* or ?) for pattern matching — without them the value is treated as an exact match. Examples: "10.0.0.1" (exact match), "10.33.*" (starts with "10.33."), "*" (any non-empty value). Returns all if not specified.
+            filter_vippool (str): Wildcard filter for Vippool column. You MUST include wildcard characters (* or ?) for pattern matching — without them the value is treated as an exact match. Examples: "pool1" (exact match), "*replication*" (contains "replication"), "*" (any non-empty value). Returns all if not specified.
+            filter_cnode (str): Wildcard filter for Cnode column. You MUST include wildcard characters (* or ?) for pattern matching — without them the value is treated as an exact match. Examples: "cnode-1" (exact match), "cnode-130*" (starts with "cnode-130"), "*" (any non-empty value). Returns all if not specified.
+            top_n_diagram (int): Maximum number of hosts and views to show in the diagram, ranked by bandwidth. When there are more hosts or views than this limit, only the top N by BW are shown and a summary node indicates how many more exist (e.g., "... and 123 more hosts"). Set to 0 for no limit. Default: 5.
+
+        Returns:
+            A JSON object with the following fields:
+
+            - timestamp (str): ISO 8601 timestamp of the data snapshot.
+
+            - mermaid_diagram (str): A ready-to-render Mermaid diagram string already wrapped
+              in a ```mermaid fenced code block. Copy it EXACTLY as-is into your response.
+              Do NOT unwrap, modify, or regenerate it.
+              When top_n_diagram is set, only the top N hosts and views (by BW) are shown,
+              with summary nodes for the remainder.
+        """
+        try:
+            from vast_admin_mcp.functions import list_dataflow
+            # Smart routing for filter_viewpath: wildcards -> client-side, plain path -> API pushdown
+            # Auto-prefix "/" for non-wildcarded values that don't start with "/"
+            api_view_filter = None
+            client_view_filter = None
+            if filter_viewpath:
+                if any(c in filter_viewpath for c in ('*', '?', '!')):
+                    client_view_filter = filter_viewpath
+                else:
+                    if not filter_viewpath.startswith('/'):
+                        filter_viewpath = '/' + filter_viewpath
+                    api_view_filter = filter_viewpath
+
+            dataflow_data = list_dataflow(
+                cluster=cluster,
+                view_filter=api_view_filter,
+                timeframe=timeframe or None,
+                start_time=start_time or None,
+                end_time=end_time or None,
+                protocol_filter=protocol_filter or None,
+                sort_by=sort_by,
+                sort_type=sort_type,
+                limit=limit,
+                results_num=results_num,
+                filter_user=filter_user or None,
+                filter_host=filter_host or None,
+                filter_tenant=filter_tenant or None,
+                filter_view=client_view_filter,
+                filter_vip=filter_vip or None,
+                filter_vippool=filter_vippool or None,
+                filter_cnode=filter_cnode or None,
+                top_n_diagram=top_n_diagram,
+            )
+            mermaid_raw = dataflow_data.get("mermaid_diagram", "")
+            return {
+                "timestamp": dataflow_data.get("timestamp", ""),
+                "mermaid_diagram": f"```mermaid\\n{mermaid_raw}\\n```" if mermaid_raw else "",
+            }
+        except Exception as e:
+            import logging
+            logging.error(f"Error listing dataflow diagram: {e}")
+            raise
+'''
+
+
 def _generate_query_users_mcp_code() -> str:
     """Generate Python code representation of query_users MCP function"""
     return '''    @mcp.tool(name="query_users_vast", description="Query user names from VAST cluster using users/names endpoint")
@@ -1039,188 +1344,13 @@ def _generate_describe_mcp_code() -> str:
 '''
 
 
-def _detect_mcp_command(read_write: bool = False, debug: bool = False) -> Tuple[str, List[str]]:
-    """
-    Detect how the script was invoked and build the MCP command with full paths.
-    
-    For Docker containers, generates a docker run/exec command that the host can execute.
-    The host application (Claude Desktop, Cursor, etc.) will run this command to start the MCP server.
-    
-    Docker environment variables:
-    - DOCKER_CONTAINER_NAME: Name of running container (uses docker exec)
-    - DOCKER_IMAGE: Docker image name (uses docker run with volume mounts)
-    
-    Returns:
-        Tuple of (command_base, args_list)
-        - command_base: Full path to the executable (e.g., "/usr/bin/python3", "/usr/local/bin/vast-admin-mcp", or "docker")
-        - args_list: List of arguments
-                     For module execution: ["-m", "vast_admin_mcp", "mcp", ...]
-                     For direct execution: ["mcp", ...]
-                     For Docker exec: ["exec", "container_name", "python3", "-m", "vast_admin_mcp", "mcp", ...]
-                     For Docker run: ["run", "--rm", "-v", "host:container", "image", "python3", "-m", "vast_admin_mcp", "mcp", ...]
-    """
-    import sys
-    import os
-    import shutil
-    
-    # Check if running in Docker FIRST (priority check)
-    # This must be checked before other conditions to ensure Docker commands are generated
-    is_docker = os.path.exists('/.dockerenv') or os.environ.get('DOCKER_CONTAINER') == 'true'
-    
-    # Get the original command from sys.argv
-    # sys.argv[0] contains the script name/path
-    script_path = sys.argv[0]
-    
-    # Build base args list (will be prepended with module args if needed)
-    base_args = ['mcp']
-    if read_write:
-        base_args.append('--read-write')
-    if debug:
-        base_args.append('--debug')
-    
-    # If running in Docker, generate vast-admin-mcp-docker.sh command for host to execute
-    if is_docker:
-        # Docker container - generate a command that uses vast-admin-mcp-docker.sh
-        # The host needs to run vast-admin-mcp-docker.sh to start the MCP server
-        
-        # Get path to vast-admin-mcp-docker.sh from environment or try to find it
-        docker_run_script = os.environ.get('DOCKER_RUN_SCRIPT_PATH')
-        if not docker_run_script:
-            # Try to find vast-admin-mcp-docker.sh in common locations
-            # First, try to get the project root (where vast-admin-mcp-docker.sh should be)
-            # We can't easily detect this from inside Docker, so use a default
-            # The user should set DOCKER_RUN_SCRIPT_PATH environment variable
-            docker_run_script = os.environ.get('DOCKER_RUN_SCRIPT', 'vast-admin-mcp-docker.sh')
-        
-        # The command is vast-admin-mcp-docker.sh with mcp and optional flags
-        # base_args already contains ['mcp'] and optionally ['--read-write', '--debug']
-        return docker_run_script, base_args
-    else:
-        # Fallback: assume pip-installed, try to find in PATH
-        vast_cmd_path = shutil.which('vast-admin-mcp')
-        if vast_cmd_path:
-            return vast_cmd_path, base_args
-        else:
-            # Last resort: use command name (might not work but better than nothing)
-            return 'vast-admin-mcp', base_args
-
-
-def _is_docker() -> bool:
-    """Check if running inside Docker container."""
-    import os
-    return os.path.exists('/.dockerenv') or os.environ.get('DOCKER_CONTAINER') == 'true'
-
-
-
-
-def _get_mcp_tool_config(tool_name: str) -> Dict[str, str]:
-    """Get MCP tool configuration (config path, section name, tool display name).
-    
-    Args:
-        tool_name: Name of the tool ('cursor', 'claude-desktop', 'windsurf', 'vscode', 'gemini-cli')
-        
-    Returns:
-        Dictionary with 'config_path', 'section_name', 'tool_display_name', and 'restart_instruction'
-        
-    Raises:
-        ValueError: If tool_name is not recognized
-    """
-    import platform
-    
-    tool_configs = {
-        'cursor': {
-            'config_path': os.path.expanduser('~/.cursor/mcp.json'),
-            'section_name': 'mcpServers',
-            'tool_display_name': 'Cursor',
-            'restart_instruction': 'Restart Cursor'
-        },
-        'claude-desktop': {
-            'config_path': _get_claude_desktop_config_path(),
-            'section_name': 'mcpServers',
-            'tool_display_name': 'Claude Desktop',
-            'restart_instruction': 'Restart Claude Desktop'
-        },
-        'windsurf': {
-            'config_path': os.path.expanduser('~/.codeium/windsurf/mcp_config.json'),
-            'section_name': 'mcpServers',
-            'tool_display_name': 'Windsurf',
-            'restart_instruction': 'Restart Windsurf'
-        },
-        'vscode': {
-            'config_path': os.path.expanduser('~/.vscode/mcp.json'),
-            'section_name': 'servers',
-            'tool_display_name': 'VSCode',
-            'restart_instruction': 'Restart VSCode'
-        },
-        'gemini-cli': {
-            'config_path': os.path.expanduser('~/.gemini/settings.json'),
-            'section_name': 'mcpServers',
-            'tool_display_name': 'Gemini CLI',
-            'restart_instruction': 'Restart Gemini CLI or reload the configuration'
-        }
-    }
-    
-    if tool_name not in tool_configs:
-        raise ValueError(f"Unknown tool: {tool_name}. Supported tools: {', '.join(tool_configs.keys())}")
-    
-    return tool_configs[tool_name]
-
-
-def _get_claude_desktop_config_path() -> str:
-    """Get Claude Desktop config path based on operating system."""
-    import platform
-    system = platform.system()
-    if system == 'Darwin':  # macOS
-        return os.path.expanduser('~/Library/Application Support/Claude/claude_desktop_config.json')
-    elif system == 'Windows':
-        appdata = os.environ.get('APPDATA', '')
-        return os.path.join(appdata, 'Claude', 'claude_desktop_config.json')
-    else:  # Linux
-        return os.path.expanduser('~/.config/Claude/claude_desktop_config.json')
-
-
-def _configure_mcp_tool(tool_name: str, command_base: str, args: list[str]) -> None:
-    """Configure MCP server for a specific tool - shows instructions only.
-    
-    This unified function replaces the four separate _configure_* functions.
-    
-    Args:
-        tool_name: Name of the tool ('cursor', 'claude-desktop', 'windsurf', 'vscode', 'gemini-cli')
-        command_base: Base command to run the MCP server
-        args: Arguments to pass to the MCP server command
-    """
-    import json
-    
-    # Get tool-specific configuration
-    tool_config = _get_mcp_tool_config(tool_name)
-    config_path = tool_config['config_path']
-    section_name = tool_config['section_name']
-    tool_display_name = tool_config['tool_display_name']
-    restart_instruction = tool_config['restart_instruction']
-    
-    # Generate config entry
-    new_config_entry = {
-        "VAST Admin MCP": {
-            "command": command_base,
-            "args": args
-        }
-    }
-    
-    # Generate full file structure
-    full_config = {section_name: new_config_entry}
-    
-    print(f"📋 {tool_display_name} Configuration Instructions")
-    print(f"   Config file location: {config_path}")
-    print()
-    print(f"   Create a new file if not exists, or add the VAST Admin MCP entry to the existing '{section_name}' section:")
-    print(json.dumps(full_config, indent=2))
-    print()
-    print("📝 Next steps:")
-    print(f"   1. Create or edit the config file at: {config_path}")
-    print(f"   2. If the file exists, merge the 'VAST Admin MCP' entry into the existing '{section_name}' section")
-    print(f"   3. {restart_instruction}")
-    print(f"   4. The MCP server should be available in {tool_display_name}'s MCP tools")
-    print(f"   5. Test by asking {tool_display_name} to list VAST clusters")
+# Import shared config helpers (single source of truth for MCP setup, config paths, Docker detection)
+from vast_admin_mcp.cli.config_helpers import (
+    _is_docker,
+    _get_mcp_tool_config,
+    _configure_mcp_tool,
+    _detect_mcp_command,
+)
 
 
 def _parse_type_annotation(param) -> str:
@@ -1827,6 +1957,121 @@ def main():
         help='Show MCP tool structure and debugging information instead of executing the command'
     )
     
+    # Dataflow command
+    dataflow_parser = subparsers.add_parser('dataflow', help='Show dataflow analytics: how hosts communicate with VAST components (views, VIPs, cnodes)')
+    dataflow_parser.add_argument(
+        '--cluster', '-c',
+        required=True,
+        help='Target cluster address or name (required)'
+    )
+    dataflow_parser.add_argument(
+        '--timeframe', '-t',
+        help='Relative time window (e.g., 5m, 10m, 1h, 24h, 7d). Default is realtime. Mutually exclusive with --start-time/--end-time.'
+    )
+    dataflow_parser.add_argument(
+        '--start-time',
+        dest='start_time',
+        help='Absolute start of time range in ISO 8601 format (e.g., 2025-02-16T10:00:00.000Z). Mutually exclusive with --timeframe.'
+    )
+    dataflow_parser.add_argument(
+        '--end-time',
+        dest='end_time',
+        help='Absolute end of time range in ISO 8601 format (e.g., 2025-02-16T10:00:00.000Z). Mutually exclusive with --timeframe.'
+    )
+    dataflow_parser.add_argument(
+        '--protocol-filter',
+        dest='protocol_filter',
+        choices=['NFS', 'NFS4', 'S3', 'SMB'],
+        help='Filter by protocol: NFS, NFS4, S3, or SMB'
+    )
+    dataflow_parser.add_argument(
+        '--sort-by',
+        dest='sort_by',
+        default='bw',
+        help='API sort field (default: bw)'
+    )
+    dataflow_parser.add_argument(
+        '--sort-type',
+        dest='sort_type',
+        default='total',
+        help='API sort type (default: total)'
+    )
+    dataflow_parser.add_argument(
+        '--limit',
+        type=int,
+        default=200,
+        help='API result limit (default: 200)'
+    )
+    dataflow_parser.add_argument(
+        '--results-num',
+        dest='results_num',
+        type=int,
+        default=100,
+        help='API results_num (default: 100)'
+    )
+    dataflow_parser.add_argument(
+        '--user',
+        dest='filter_user',
+        help='Client-side wildcard filter for User column (e.g., "*runner*")'
+    )
+    dataflow_parser.add_argument(
+        '--host',
+        dest='filter_host',
+        help='Client-side wildcard filter for Host column (e.g., "web-*")'
+    )
+    dataflow_parser.add_argument(
+        '--tenant',
+        dest='filter_tenant',
+        help='Client-side wildcard filter for Tenant column'
+    )
+    dataflow_parser.add_argument(
+        '--viewpath',
+        dest='filter_viewpath',
+        help='Filter by view PATH (not name). Dual behavior: with wildcards (*, ?, !) filters client-side; without wildcards pushes exact match to API. E.g., "*myshare*" (client-side) or "/data/share1" (API pushdown).'
+    )
+    dataflow_parser.add_argument(
+        '--vip',
+        dest='filter_vip',
+        help='Client-side wildcard filter for VIP column (e.g., "10.0.1.*")'
+    )
+    dataflow_parser.add_argument(
+        '--vippool',
+        dest='filter_vippool',
+        help='Client-side wildcard filter for Vippool column'
+    )
+    dataflow_parser.add_argument(
+        '--cnode',
+        dest='filter_cnode',
+        help='Client-side wildcard filter for Cnode column'
+    )
+    dataflow_parser.add_argument(
+        '--show-vips',
+        dest='show_vips',
+        action='store_true',
+        default=False,
+        help='Include VIP addresses inside CNode labels in the Mermaid diagram (default: hidden)'
+    )
+    dataflow_parser.add_argument(
+        '--format', '-f',
+        choices=['table', 'json', 'csv', 'mermaid'],
+        default='table',
+        help='Output format (default: table). Use "mermaid" to output only the Mermaid diagram.'
+    )
+    dataflow_parser.add_argument(
+        '--output', '-o',
+        help='Output file path (optional)'
+    )
+    dataflow_parser.add_argument(
+        '--debug', '-d',
+        action='store_true',
+        help='Log debug messages to console'
+    )
+    dataflow_parser.add_argument(
+        '--mcp',
+        action='store_true',
+        help='Show MCP tool structure and debugging information instead of executing the command'
+    )
+    
     # List monitors command
     list_monitors_parser = subparsers.add_parser('list-monitors', help='List all available predefined monitors for performance graphs')
     list_monitors_parser.add_argument(
@@ -2396,6 +2641,8 @@ def main():
         start_mcp(read_write=args.read_write)
     elif args.command == 'performance':
         handle_performance_command(args)
+    elif args.command == 'dataflow':
+        handle_dataflow_command(args)
     elif args.command == 'list-monitors':
         handle_list_monitors_command(args)
     elif args.command == 'performance-graph':

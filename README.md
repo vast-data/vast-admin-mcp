@@ -88,6 +88,8 @@ List all VAST clusters
 List all views on cluster cluster1
 Show me all tenants across all clusters
 Create bandwidth and iops graph for cluster1 over the last hour
+create dataflow diagram for cluster1 for /path view on the tenant3 tenant for the last hour 
+show me dataflow diagram for 172.21.224.139 on cluster1
 Show me the hardware topology for cluster cluster1 
 Are there any issues with my configured data protection relationships ? 
 Create a comprehensive report comparing all clusters
@@ -206,7 +208,7 @@ docker run --rm -it \
 
 ```bash
 # Optional: Set version (defaults to 0.1.3)
-export VERSION=0.1.8
+export VERSION=0.1.9
 
 # Start container in background
 docker-compose up -d
@@ -398,18 +400,88 @@ The following create tools are available when the MCP server is started with `--
 
 ### Environment Variables
 
+#### Template File Paths
+
 Template file paths can be overridden using environment variables:
+
 - `VAST_ADMIN_MCP_DEFAULT_TEMPLATE_FILE`: Override default template file path
 - `VAST_ADMIN_MCP_TEMPLATE_MODIFICATIONS_FILE`: Override template modifications file path
 - `VAST_ADMIN_MCP_VIEW_TEMPLATE_FILE`: Override view templates file path
 
 Example:
+
 ```bash
 export VAST_ADMIN_MCP_DEFAULT_TEMPLATE_FILE=/custom/path/default_template.yaml
 export VAST_ADMIN_MCP_TEMPLATE_MODIFICATIONS_FILE=/custom/path/modifications.yaml
 export VAST_ADMIN_MCP_VIEW_TEMPLATE_FILE=/custom/path/view_templates.json
 vast-admin-mcp list views
 ```
+
+#### Proxy Configuration
+
+The server supports HTTP/HTTPS and SOCKS proxies for reaching VAST clusters through corporate or enterprise network environments. Proxies are configured via standard environment variables:
+
+- `HTTPS_PROXY` or `https_proxy` — highest precedence (recommended for VAST since the API uses HTTPS)
+- `HTTP_PROXY` or `http_proxy` — fallback
+- `ALL_PROXY` or `all_proxy` — catch-all, recommended for SOCKS proxies
+
+**Bypassing the proxy (`NO_PROXY`):**
+
+Use `NO_PROXY` (or `no_proxy`) to list hosts that should connect directly, without going through the proxy. Separate multiple entries with commas. A wildcard `*` bypasses the proxy for all hosts.
+
+```bash
+# Skip proxy for internal VAST clusters
+export NO_PROXY=vast-cluster1.internal,10.0.0.5
+```
+
+**HTTP/HTTPS proxy examples:**
+
+```bash
+# Basic HTTP proxy
+export HTTPS_PROXY=http://proxy.example.com:8080
+
+# Proxy with authentication
+export HTTPS_PROXY=http://username:password@proxy.example.com:8080
+
+# Run commands as normal — proxy is picked up automatically
+vast-admin-mcp clusters
+vast-admin-mcp list views --cluster cluster1
+```
+
+**SOCKS proxy support:**
+
+SOCKS proxies (SOCKS4, SOCKS4a, SOCKS5, SOCKS5h) are supported but require the optional `PySocks` library:
+
+```bash
+# Install PySocks for SOCKS proxy support
+pip install 'vast-admin-mcp[socks]'
+# — or directly —
+pip install pysocks
+
+# SOCKS5 proxy (client-side DNS resolution)
+export ALL_PROXY=socks5://proxy.example.com:1080
+
+# SOCKS5h proxy (remote DNS resolution — recommended for internal hostnames)
+export ALL_PROXY=socks5h://proxy.example.com:1080
+
+# SOCKS5 with authentication
+export ALL_PROXY=socks5h://username:password@proxy.example.com:1080
+
+# SOCKS4 proxy
+export ALL_PROXY=socks4://proxy.example.com:1080
+```
+
+**Proxy types at a glance:**
+
+| Type | Description | Env var | Dependency |
+|------|-------------|---------|------------|
+| HTTP/HTTPS | Standard corporate proxies | `HTTPS_PROXY` / `HTTP_PROXY` | Built-in |
+| SOCKS5 | SOCKS5 with client-side DNS | `ALL_PROXY` | PySocks |
+| SOCKS5h | SOCKS5 with remote DNS (recommended for privacy) | `ALL_PROXY` | PySocks |
+| SOCKS4 | Legacy SOCKS4 protocol | `ALL_PROXY` | PySocks |
+| SOCKS4a | SOCKS4 with remote DNS | `ALL_PROXY` | PySocks |
+
+> **Note:** Any proxy env var will work with any proxy type, but using `ALL_PROXY` for SOCKS proxies follows standard conventions and keeps your configuration clear.
 
 ## API Whitelist
 
