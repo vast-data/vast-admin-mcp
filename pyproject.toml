@@ -49,6 +49,9 @@ dependencies = [
 dev = [
   "watchdog>=3.0.0",
 ]
+socks = [
+  "PySocks>=1.7.1",
+]
 
 [project.scripts]
 vast-admin-mcp = "vast_admin_mcp.__main__:main"

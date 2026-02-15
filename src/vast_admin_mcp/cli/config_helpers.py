@@ -6,16 +6,71 @@ import platform
 from typing import Dict, Tuple, List
 
 
+def _is_docker() -> bool:
+    """Check if running inside Docker container."""
+    return os.path.exists('/.dockerenv') or os.environ.get('DOCKER_CONTAINER') == 'true'
+
+
+def _get_host_platform() -> str:
+    """Get the host platform, accounting for Docker containers.
+    
+    When running in Docker (Linux), checks HOST_PLATFORM env var
+    to determine the actual host OS.
+    
+    Returns:
+        'Darwin', 'Windows', or 'Linux'
+    """
+    # If running inside Docker, the container is always Linux,
+    # but the HOST may be macOS or Windows
+    if _is_docker():
+        return os.environ.get('HOST_PLATFORM', 'Darwin')  # Default to macOS for Docker
+    return platform.system()
+
+
+def _get_config_path(relative_path: str) -> str:
+    """Get a config file path, using ~ prefix when in Docker (to show host path).
+    
+    When running in Docker, os.path.expanduser('~') resolves to /root which is
+    meaningless to the host user. Instead, keep the ~ so the user sees a
+    relative-to-home path they can use on the host.
+    
+    Args:
+        relative_path: Path relative to home dir (e.g., '.cursor/mcp.json')
+        
+    Returns:
+        Full path string
+    """
+    if _is_docker():
+        return f"~/{relative_path}"
+    return os.path.expanduser(f"~/{relative_path}")
+
+
 def _get_claude_desktop_config_path() -> str:
     """Get Claude Desktop config path based on operating system."""
-    system = platform.system()
-    if system == 'Darwin':  # macOS
-        return os.path.expanduser('~/Library/Application Support/Claude/claude_desktop_config.json')
-    elif system == 'Windows':
+    host_system = _get_host_platform()
+    if host_system == 'Darwin':  # macOS
+        return _get_config_path('Library/Application Support/Claude/claude_desktop_config.json')
+    elif host_system == 'Windows':
+        if _is_docker():
+            return '%APPDATA%/Claude/claude_desktop_config.json'
         appdata = os.environ.get('APPDATA', '')
         return os.path.join(appdata, 'Claude', 'claude_desktop_config.json')
     else:  # Linux
-        return os.path.expanduser('~/.config/Claude/claude_desktop_config.json')
+        return _get_config_path('.config/Claude/claude_desktop_config.json')
+
+
+def _get_vscode_config_path() -> str:
+    """Get VSCode MCP config path based on operating system."""
+    host_system = _get_host_platform()
+    if host_system == 'Darwin':  # macOS
+        return _get_config_path('Library/Application Support/Code/User/mcp.json')
+    elif host_system == 'Windows':
+        if _is_docker():
+            return '%APPDATA%/Code/User/mcp.json'
+        appdata = os.environ.get('APPDATA', '')
+        return os.path.join(appdata, 'Code', 'User', 'mcp.json')
+    else:  # Linux
+        return _get_config_path('.config/Code/User/mcp.json')
 
 
 def _get_mcp_tool_config(tool_name: str) -> Dict[str, str]:
@@ -32,7 +87,7 @@ def _get_mcp_tool_config(tool_name: str) -> Dict[str, str]:
     """
     tool_configs = {
         'cursor': {
-            'config_path': os.path.expanduser('~/.cursor/mcp.json'),
+            'config_path': _get_config_path('.cursor/mcp.json'),
             'section_name': 'mcpServers',
             'tool_display_name': 'Cursor',
             'restart_instruction': 'Restart Cursor'
@@ -44,19 +99,19 @@ def _get_mcp_tool_config(tool_name: str) -> Dict[str, str]:
             'restart_instruction': 'Restart Claude Desktop'
         },
         'windsurf': {
-            'config_path': os.path.expanduser('~/.codeium/windsurf/mcp_config.json'),
+            'config_path': _get_config_path('.codeium/windsurf/mcp_config.json'),
             'section_name': 'mcpServers',
             'tool_display_name': 'Windsurf',
             'restart_instruction': 'Restart Windsurf'
         },
         'vscode': {
-            'config_path': os.path.expanduser('~/.vscode/mcp.json'),
+            'config_path': _get_vscode_config_path(),
             'section_name': 'servers',
             'tool_display_name': 'VSCode',
             'restart_instruction': 'Restart VSCode'
         },
         'gemini-cli': {
-            'config_path': os.path.expanduser('~/.gemini/settings.json'),
+            'config_path': _get_config_path('.gemini/settings.json'),
             'section_name': 'mcpServers',
             'tool_display_name': 'Gemini CLI',
             'restart_instruction': 'Restart Gemini CLI or reload the configuration'
@@ -174,9 +229,4 @@ def _detect_mcp_command(read_write: bool = False, debug: bool = False) -> Tuple[
         else:
             # Last resort: use command name (might not work but better than nothing)
             return 'vast-admin-mcp', base_args
-
-
-def _is_docker() -> bool:
-    """Check if running inside Docker container."""
-    return os.path.exists('/.dockerenv') or os.environ.get('DOCKER_CONTAINER') == 'true'
 

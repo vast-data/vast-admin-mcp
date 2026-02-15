@@ -7,6 +7,7 @@ ABOUT_FILE="src/vast_admin_mcp/__about__.py"
 README_FILE="README.md"
 DOCKER_COMPOSE_FILE="docker-compose.yml"
 DOCKERFILE="Dockerfile"
+DOCKER_SCRIPT="vast-admin-mcp-docker.sh"
 
 # Function to display usage
 usage() {
@@ -94,18 +95,25 @@ sed -i.bak "s/ARG VERSION=${CURRENT_VERSION}/ARG VERSION=${NEW_VERSION}/" "$DOCK
 rm -f "${DOCKERFILE}.bak"
 echo "✅ Version updated in ${DOCKERFILE}"
 
+# Update version in vast-admin-mcp-docker.sh (vastdataorg/vast-admin-mcp:latest -> versioned tag)
+sed -i.bak "s|vastdataorg/vast-admin-mcp:${CURRENT_VERSION}|vastdataorg/vast-admin-mcp:${NEW_VERSION}|g" "$DOCKER_SCRIPT"
+rm -f "${DOCKER_SCRIPT}.bak"
+echo "✅ Version updated in ${DOCKER_SCRIPT}"
+
 echo ""
 echo "📝 Files updated:"
 echo "  - ${ABOUT_FILE}"
 echo "  - ${README_FILE}"
 echo "  - ${DOCKER_COMPOSE_FILE}"
 echo "  - ${DOCKERFILE}"
+echo "  - ${DOCKER_SCRIPT}"
 echo ""
 echo "Next steps:"
-echo "  1. Review changes: git diff ${ABOUT_FILE} ${README_FILE} ${DOCKER_COMPOSE_FILE} ${DOCKERFILE}"
-echo "  2. Commit changes: git add ${ABOUT_FILE} ${README_FILE} ${DOCKER_COMPOSE_FILE} ${DOCKERFILE} && git commit -m \"Bump version to ${NEW_VERSION}\""
+echo "  1. Review changes: git diff ${ABOUT_FILE} ${README_FILE} ${DOCKER_COMPOSE_FILE} ${DOCKERFILE} ${DOCKER_SCRIPT}"
+echo "  2. Commit changes: git add ${ABOUT_FILE} ${README_FILE} ${DOCKER_COMPOSE_FILE} ${DOCKERFILE} ${DOCKER_SCRIPT} && git commit -m \"Bump version to ${NEW_VERSION}\""
 echo "  3. Tag release:    git tag -a v${NEW_VERSION} -m \"Release v${NEW_VERSION}\""
 echo "  4. Build package:  make build-python"
 echo "  5. Build Docker:   make build-docker"
 echo "  6. Push to PyPI:   python -m twine upload dist/vast_admin_mcp-${NEW_VERSION}*"
+echo "  7. Push Docker:    docker push vastdataorg/vast-admin-mcp:${NEW_VERSION} && docker push vastdataorg/vast-admin-mcp:latest"
 echo ""

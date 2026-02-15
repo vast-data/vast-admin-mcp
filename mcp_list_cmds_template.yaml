@@ -53,6 +53,7 @@ api_whitelist:
   - metrics
   - monitors  # Allows all sub-endpoints like monitors.ad_hoc_query
   - capacity
+  - iodata  # Data flow analytics (host/view/VIP/cnode communication)
   
   # User and host management
   - hosts

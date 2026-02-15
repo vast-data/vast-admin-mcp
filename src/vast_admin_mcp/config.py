@@ -85,12 +85,21 @@ GRANULARITY_THRESHOLD_DAYS = 864000  # 10 days - threshold for days granularity
 # Excluded metric patterns for view performance
 EXCLUDED_VIEW_METRIC_PATTERNS = ['squares', 's3', 'rpc', 'time']
 
+# Dataflow (iodata) defaults
+DATAFLOW_DEFAULT_RESULTS_NUM = 10
+DATAFLOW_DEFAULT_SORT_BY = "bw"
+DATAFLOW_DEFAULT_SORT_TYPE = "total"
+DATAFLOW_DEFAULT_LIMIT = 10
+DATAFLOW_DEFAULT_TOP_N_DIAGRAM = 5  # Max hosts/views shown in Mermaid diagram (by BW). 0 = no limit.
+DATAFLOW_DIAGRAM_MERMAID_THEME = "neutral"  # Mermaid theme: 'neutral', 'default', 'dark', 'forest', or 'base'
+DATAFLOW_VALID_PROTOCOLS = ['NFS3', 'NFS4', 'S3', 'SMB', 'DATABASE', 'BLOCK']
+
 # jq command timeout
 JQ_TIMEOUT_SECONDS = 5
 
 # API request timeouts (in seconds)
 API_CONNECT_TIMEOUT = 5  # Connection timeout for API requests
-API_READ_TIMEOUT = 10  # Read timeout for API requests
+API_READ_TIMEOUT = 30  # Read timeout for API requests
 API_MAX_RETRIES = 1  # Maximum number of retries for failed API requests
 
 # Logging constants

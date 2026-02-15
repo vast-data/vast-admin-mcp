@@ -1,5 +1,6 @@
 """VAST client creation and utilities."""
 
+import os
 import time
 import functools
 import logging
@@ -9,6 +10,87 @@ import urllib3
 from vastpy import VASTClient
 
 from .config import load_config, REST_PAGE_SIZE, API_CONNECT_TIMEOUT, API_READ_TIMEOUT, API_MAX_RETRIES
+
+def _get_proxy_url(target_host: str) -> Optional[str]:
+    """Detect proxy URL from standard environment variables, respecting NO_PROXY.
+
+    Checks environment variables in precedence order:
+    HTTPS_PROXY/https_proxy > HTTP_PROXY/http_proxy > ALL_PROXY/all_proxy
+
+    If the target host matches a NO_PROXY/no_proxy pattern, returns None so the
+    request bypasses the proxy.
+
+    Args:
+        target_host: The hostname or IP address of the target server.
+
+    Returns:
+        Proxy URL string, or None if no proxy is configured or the host is excluded.
+    """
+    # Check NO_PROXY / no_proxy first
+    no_proxy = os.environ.get('NO_PROXY') or os.environ.get('no_proxy') or ''
+    if no_proxy:
+        no_proxy_hosts = [h.strip() for h in no_proxy.split(',')]
+        for pattern in no_proxy_hosts:
+            if not pattern:
+                continue
+            # Wildcard — bypass proxy for everything
+            if pattern == '*':
+                return None
+            # Exact match
+            if target_host == pattern:
+                return None
+            # Suffix / domain match (e.g. ".example.com" matches "foo.example.com")
+            if pattern.startswith('.') and target_host.endswith(pattern):
+                return None
+            if not pattern.startswith('.') and target_host.endswith('.' + pattern):
+                return None
+
+    # Precedence: HTTPS_PROXY > HTTP_PROXY > ALL_PROXY (with case-insensitive fallback)
+    proxy_url = (
+        os.environ.get('HTTPS_PROXY') or os.environ.get('https_proxy') or
+        os.environ.get('HTTP_PROXY') or os.environ.get('http_proxy') or
+        os.environ.get('ALL_PROXY') or os.environ.get('all_proxy')
+    )
+    return proxy_url
+
+
+_SOCKS_SCHEMES = ('socks5://', 'socks5h://', 'socks4://', 'socks4a://')
+
+
+def _create_pool_manager(proxy_url: Optional[str] = None, **kwargs):
+    """Create the appropriate urllib3 pool/proxy manager.
+
+    Args:
+        proxy_url: Proxy URL string, or None for a direct connection.
+        **kwargs: Extra keyword arguments forwarded to the manager constructor
+                  (e.g. retries, timeout, ca_certs, cert_reqs).
+
+    Returns:
+        An instance of urllib3.PoolManager, urllib3.ProxyManager,
+        or urllib3.contrib.socks.SOCKSProxyManager.
+
+    Raises:
+        ImportError: If a SOCKS proxy is requested but PySocks is not installed.
+    """
+    if proxy_url is None:
+        return urllib3.PoolManager(**kwargs)
+
+    if proxy_url.lower().startswith(_SOCKS_SCHEMES):
+        try:
+            from urllib3.contrib.socks import SOCKSProxyManager
+        except ImportError:
+            raise ImportError(
+                "SOCKS proxy configured but PySocks library is not installed. "
+                "Install it with: pip install 'vast-admin-mcp[socks]'  "
+                "(or: pip install pysocks)"
+            )
+        logging.debug("Using SOCKSProxyManager for %s proxy", proxy_url.split('://')[0])
+        return SOCKSProxyManager(proxy_url, **kwargs)
+
+    # HTTP / HTTPS proxy
+    logging.debug("Using ProxyManager for proxy %s", proxy_url)
+    return urllib3.ProxyManager(proxy_url, **kwargs)
+
 
 # Monkey-patch VASTClient.request() to add timeout and retry configuration
 # VASTClient creates a new PoolManager for each request, so we patch the request method
@@ -41,21 +123,26 @@ def _patch_vast_client_request():
             read=API_READ_TIMEOUT
         )
         
-        # Create PoolManager with our configuration
+        # Build common kwargs for the connection manager
+        manager_kwargs = {
+            'retries': retry_config,
+            'timeout': timeout_config,
+        }
+
         if self._cert_file:
-            pm = urllib3.PoolManager(
-                ca_certs=self._cert_file,
-                server_hostname=self._cert_server_name,
-                retries=retry_config,
-                timeout=timeout_config
-            )
+            manager_kwargs['ca_certs'] = self._cert_file
+            manager_kwargs['server_hostname'] = self._cert_server_name
         else:
-            pm = urllib3.PoolManager(
-                cert_reqs='CERT_NONE',
-                retries=retry_config,
-                timeout=timeout_config
-            )
+            manager_kwargs['cert_reqs'] = 'CERT_NONE'
             urllib3.disable_warnings(category=urllib3.exceptions.InsecureRequestWarning)
+
+        # Detect proxy from environment variables (respects NO_PROXY)
+        proxy_url = _get_proxy_url(self._address)
+        if proxy_url:
+            logging.debug("Routing request to %s through proxy %s", self._address, proxy_url)
+
+        # Create the appropriate PoolManager / ProxyManager / SOCKSProxyManager
+        pm = _create_pool_manager(proxy_url, **manager_kwargs)
         
         # Rest of the request logic (copied from VASTClient.request)
         if self._token:
@@ -106,7 +193,7 @@ from .utils import retrieve_password_secure
 from .cache import get_cache_manager
 
 # Endpoints that do not support pagination (return single dict or non-paginated list)
-NON_PAGINATED_ENDPOINTS = ['monitors.ad_hoc_query']
+NON_PAGINATED_ENDPOINTS = ['monitors.ad_hoc_query', 'iodata']
 # Monitor query endpoints follow pattern monitors.{id}.query - handle dynamically
 
 # Valid VAST API object types for security validation
