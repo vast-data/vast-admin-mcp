@@ -32,7 +32,8 @@ from .template_parser import TemplateParser
 if True:  # Always import, but only register when read_write=True
     try:
         from .create_functions import (
-            create_view, create_view_from_template, create_snapshot, create_clone, create_quota
+            create_view, create_view_from_template, create_snapshot, create_clone, create_quota,
+            create_support_bundle
         )
         CREATE_FUNCTIONS_AVAILABLE = True
     except ImportError as e:
@@ -43,6 +44,7 @@ if True:  # Always import, but only register when read_write=True
         create_snapshot = None
         create_clone = None
         create_quota = None
+        create_support_bundle = None
 
 
 def start_mcp(read_write: bool = False):
@@ -1422,6 +1424,122 @@ def start_mcp(read_write: bool = False):
                 logging.error(f"Error creating/updating quota: {e}")
                 raise
         
+        @mcp.tool(name="create_support_bundle_vast", description="Create a support bundle on a VAST cluster for diagnostics and troubleshooting")
+        async def create_support_bundle_mcp(
+            cluster: str,
+            prefix: str,
+            start_time: str = '',
+            end_time: str = '',
+            duration: str = '',
+            preset: str = 'standard',
+            aggregated: bool = False,
+            text: bool = False,
+            obfuscated: bool = False,
+            cnodes_only: bool = False,
+            dnodes_only: bool = False,
+            send_now: bool = False,
+            cnode_ids: str = '',
+            dnode_ids: str = '',
+            cnode_filter: str = '',
+            dnode_filter: str = '',
+            luna_args: str = '',
+        ):
+            """
+            Create a support bundle on a VAST cluster. Requires read-write mode.
+
+            The tool supports both default and custom bundles with flexible time specification
+            and automatic node ID resolution from name patterns.
+
+            TIME SPECIFICATION - four modes (pick one):
+              1. duration ONLY (e.g., "5m") — interpreted as "last 5 minutes": end_time=now, start_time=now-duration.
+                 This is the simplest option for "last N minutes" requests. No start_time or end_time needed.
+              2. start_time + duration — end_time is calculated as start_time + duration.
+              3. end_time + duration — start_time is calculated as end_time - duration.
+              4. start_time + end_time — both provided explicitly.
+            IMPORTANT: When the user says "last 5 minutes" or "for the last 10m", just pass duration="5m" or duration="10m".
+            Do NOT try to calculate start_time yourself — the tool handles it automatically.
+
+            Args:
+                cluster: Cluster address or name. Required. Use list_clusters_vast() to discover available clusters.
+                prefix: Bundle name/prefix (e.g., "case12345", "investigation"). Required.
+                start_time: Absolute UTC timestamp in "YYYY-MM-DD HH:MM:SS" format. Optional.
+                    CRITICAL: Do NOT pass relative or natural language terms like "yesterday", "today",
+                    "last week", "now", "2 hours ago". You MUST resolve these to an absolute timestamp
+                    yourself before calling this tool. For example, if today is 2026-03-09 and the user
+                    says "yesterday at midnight", you must pass "2026-03-08 00:00:00".
+                    Leave empty for "last N minutes" requests — just provide duration instead.
+                end_time: Absolute UTC timestamp in "YYYY-MM-DD HH:MM:SS" format. Optional.
+                    Same rule as start_time: NEVER pass relative terms. Always resolve to absolute timestamp.
+                duration: Duration string (e.g., "5m", "10m", "1h", "30m"). Supports: s/m/h/d/w.
+                    Can be used ALONE for "last N minutes" — the tool calculates start and end times automatically.
+                    Can also be combined with start_time or end_time to calculate the other.
+                preset: Bundle preset type. Defaults to "standard". Valid values:
+                    standard, default, debug, micro, mini, management, performance,
+                    traces_and_metrics, nfsv3, nfsv4, smb, s3, estore, raid, hardware,
+                    permission_issues, rca, dr, inspect_metadata.
+                    When the user says "traces and metrics", use "traces_and_metrics".
+                    When the user says "support bundle" without specifying a type, use "standard".
+                aggregated: Whether to aggregate bundle data. Defaults to False.
+                text: Whether to include text output. Defaults to False.
+                obfuscated: Whether to encrypt private data in the bundle. Defaults to False.
+                    Set to True when the user asks to "hide private data" or "encrypt" or "obfuscate".
+                cnodes_only: Include only cnode data in the bundle. Defaults to False.
+                    Set to True when the user says "for all cnodes" without mentioning dnodes, or "cnodes only".
+                dnodes_only: Include only dnode data in the bundle. Defaults to False.
+                    Set to True when the user says "for all dnodes" without mentioning cnodes, or "dnodes only".
+                send_now: Upload bundle to VAST support immediately after creation. Defaults to False.
+                    Set to True when the user says "upload to support" or "send to support".
+                cnode_ids: Comma-separated cnode IDs to include (e.g., "1,2,3"). Use when specific IDs are known.
+                dnode_ids: Comma-separated dnode IDs to include (e.g., "1,2"). Use when specific IDs are known.
+                cnode_filter: Name prefix or wildcard pattern to resolve cnode IDs automatically (e.g., "cnode-128*").
+                    The tool will query the cnodes endpoint and match display_name against this pattern.
+                    Use when the user specifies cnodes by name rather than ID.
+                dnode_filter: Name prefix or wildcard pattern to resolve dnode IDs automatically (e.g., "dnode-5*").
+                    The tool will query the dnodes endpoint and match display_name against this pattern.
+                    Use when the user specifies dnodes by name rather than ID.
+                luna_args: Luna arguments string (e.g., "perf_overview"). Optional, used for custom RCA bundles.
+
+            Returns:
+                A dictionary containing bundle creation details: Cluster, ID, Name, State, Preset,
+                Start Time, End Time, Bundle File, Bundle URL, Send Now, Obfuscated, CNodes Only,
+                DNodes Only, CNode IDs, DNode IDs, Luna Args, Position in Queue.
+
+            Examples:
+                - "last 5 min" (relative time, duration only): cluster="mycluster", prefix="quick", duration="5m"
+                - "last 10 min mini bundle uploaded to support": cluster="mycluster", prefix="mini_debug", duration="10m", preset="mini", send_now=True
+                - Absolute start + duration: cluster="mycluster", prefix="case123", start_time="2026-03-08 10:00:00", duration="5m"
+                - Absolute start + end: cluster="mycluster", prefix="case123", start_time="2026-03-08 10:00:00", end_time="2026-03-08 10:05:00"
+                - RCA bundle with luna args: cluster="mycluster", prefix="inv1", duration="5m", preset="rca", luna_args="perf_overview", send_now=True
+                - Bundle for specific cnodes by name: cluster="mycluster", prefix="debug1", duration="10m", cnode_filter="cnode-128*"
+                - Obfuscated bundle uploaded to support: cluster="mycluster", prefix="yoyo", start_time="2025-01-05 00:00:00", duration="10m", preset="traces_and_metrics", cnodes_only=True, obfuscated=True, send_now=True
+            """
+            if not read_write:
+                raise ValueError(readonly_error_msg)
+            try:
+                result = create_support_bundle(
+                    cluster=cluster,
+                    prefix=prefix,
+                    start_time=start_time or None,
+                    end_time=end_time or None,
+                    duration=duration or None,
+                    preset=preset or 'standard',
+                    aggregated=aggregated,
+                    text=text,
+                    obfuscated=obfuscated,
+                    cnodes_only=cnodes_only,
+                    dnodes_only=dnodes_only,
+                    send_now=send_now,
+                    cnode_ids=cnode_ids or None,
+                    dnode_ids=dnode_ids or None,
+                    cnode_filter=cnode_filter or None,
+                    dnode_filter=dnode_filter or None,
+                    luna_args=luna_args or None,
+                )
+                return _make_result(result)
+            except Exception as e:
+                logging.error(f"Error creating support bundle: {e}")
+                raise
+
         logging.info("Registered create tools (available in read-write mode only)")
 
     mcp.run(transport="stdio")

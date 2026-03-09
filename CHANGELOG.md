@@ -2,6 +2,21 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.2.0] - 2026-03-09
+
+### Added
+
+- **Create Support Bundle** -- New `create_support_bundle_vast` MCP tool for creating support bundles on VAST clusters (requires `--read-write` mode).
+  - Supports all 19 bundle preset types: standard, default, debug, micro, mini, management, performance, traces_and_metrics, nfsv3, nfsv4, smb, s3, estore, raid, hardware, permission_issues, rca, dr, inspect_metadata.
+  - Flexible time specification: duration only ("last 5 minutes"), start_time + duration, end_time + duration, or explicit start/end times.
+  - Automatic timestamp normalization and converts to the API-required format.
+  - Node filtering by name pattern -- `cnode_filter` and `dnode_filter` parameters resolve node IDs automatically via wildcard matching (e.g., `cnode-128*`), with matched node names returned in the output.
+  - Support for `send_now` (upload to VAST support), `obfuscated` (encrypt private data), `cnodes_only`, `dnodes_only`, and `luna_args` parameters.
+- **List S3 Access Keys** -- New `list_s3_keys_vast` MCP tool for listing S3 access keys from VAST clusters.
+  - Filterable by tenant, user/owner, and access key (with wildcard support).
+  - Shows tenant, user, access key, enabled status, and creation time.
+  - Added `locals3keys` to the API whitelist.
+
 ## [0.1.9] - 2026-02-14
 
 ### Added

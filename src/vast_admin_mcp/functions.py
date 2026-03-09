@@ -1107,7 +1107,7 @@ def describe_tool(tool_name: str) -> Dict:
     try:
         from .create_functions import (
             create_view, create_view_from_template, create_snapshot,
-            create_clone, create_quota
+            create_clone, create_quota, create_support_bundle
         )
         tool_mappings.update({
             'create_view_vast': {
@@ -1129,6 +1129,10 @@ def describe_tool(tool_name: str) -> Dict:
             'create_quota_vast': {
                 'type': 'create',
                 'function': create_quota
+            },
+            'create_support_bundle_vast': {
+                'type': 'create',
+                'function': create_support_bundle
             }
         })
     except ImportError:

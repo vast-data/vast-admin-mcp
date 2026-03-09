@@ -64,11 +64,12 @@ api_whitelist:
   - localproviders
   - users
   - s3policies
+  - locals3keys
 
   # System endpoints (for setup/validation)
   - login
   - dashboard  # Allows all sub-endpoints like dashboard.status
-  - supportbundles
+  - supportbundles: [post]  # GET + POST for create operations
 
 # ============================================================================
 # Variables Section
@@ -1215,7 +1216,65 @@ list_cmds:
       Fields:
         {{$fields}}
       {{prefer_tables}}
-  
+
+  # S3 keys command - list S3 access keys from VAST cluster(s)
+  s3_keys:
+    api_endpoints: 
+    - locals3keys
+
+    fields:
+      - <<: *cluster_field
+      - name: tenant
+        field: tenant
+        jq: .name
+        argument:
+          type: str
+          mandatory: false
+          filter: true
+          client_side_filter: true
+          aliases:
+          - tenant_name
+          - tenant_names
+      - name: user
+        field: user
+        jq: .name
+        argument:
+          type: str
+          mandatory: false
+          filter: true
+          client_side_filter: true
+          aliases:
+          - username
+          - user_name
+          - owner
+      - name: access key
+        field: access_key
+        argument:
+          type: str
+          mandatory: false
+          filter: true
+          aliases:
+          - access_key
+          - key
+          - s3_key
+          - s3_access_key
+      - name: enabled
+        type: bool
+      - name: created
+        field: creation_time
+        convert: time_delta
+
+    description: |-
+      Use this tool to retrieve a list of S3 access keys from VAST cluster(s).
+      Args:
+        {{$arguments}}
+      Returns:
+        A list of S3 access keys. Each item in the list will be a dictionary containing the access key, associated user, tenant, and status.
+      Fields:
+        {{$fields}}
+
+      {{prefer_tables}}
+
   # get a list of existing support bundles
   support_bundles:
     # API endpoints to call (first endpoint is the primary data source)
@@ -1249,6 +1308,30 @@ list_cmds:
         value: 'f"{start_time} - {end_time}"'
     description: |-
       Use this tool to retrieve a list of support bundles from VAST cluster(s).
+
+      Support bundle preset types (used when creating bundles with create_support_bundle_vast):
+        standard - Standard bundle with performance, platform, management, metrics, and core data
+        default - Default bundle configuration
+        debug - Detailed debug-level bundle
+        micro - Minimal bundle for quick diagnostics
+        mini - Small bundle with essential data
+        management - Management-focused data only
+        performance - Performance-focused data only
+        traces_and_metrics - Traces and metrics data (also known as "traces and metrics")
+        nfsv3 - NFS v3 protocol diagnostics
+        nfsv4 - NFS v4 protocol diagnostics
+        smb - SMB protocol diagnostics
+        s3 - S3 protocol diagnostics
+        estore - eStore diagnostics
+        raid - RAID diagnostics
+        hardware - Hardware diagnostics
+        permission_issues - Permission and access troubleshooting
+        rca - Root Cause Analysis bundle (supports luna_args like "perf_overview")
+        dr - Disaster Recovery diagnostics
+        inspect_metadata - Metadata inspection bundle
+
+      To create a new support bundle, use create_support_bundle_vast (requires --read-write mode).
+
       Args:
         {{$arguments}}
       Returns:

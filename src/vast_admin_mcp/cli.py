@@ -10,7 +10,7 @@ from .setup import setup_config
 from .utils import output_results, logging_main, to_cli_name, handle_errors
 from .template_parser import TemplateParser
 from .functions import list_dynamic, list_merged, list_clusters, list_performance, list_performance_graph, list_monitors, list_view_instances, list_fields, describe_tool, query_users, list_dataflow
-from .create_functions import create_view, create_view_from_template, create_snapshot, create_clone, create_quota
+from .create_functions import create_view, create_view_from_template, create_snapshot, create_clone, create_quota, create_support_bundle
 
 
 def create_list_parser():
@@ -1756,6 +1756,75 @@ def handle_create_quota_command(args):
     )
 
 
+def _generate_create_support_bundle_mcp_code() -> str:
+    """Generate Python code representation of create_support_bundle MCP function using function introspection."""
+    return _generate_create_mcp_code(
+        func=create_support_bundle,
+        tool_name="create_support_bundle_vast",
+        description="Create a support bundle on a VAST cluster for diagnostics and troubleshooting",
+        return_type="Dict[str, Any]",
+        error_message="Error creating support bundle",
+        custom_docstring="""Create a support bundle on a VAST cluster. Requires read-write mode.
+
+Args:
+    cluster: Cluster address or name. Required.
+    prefix: Bundle name/prefix. Required.
+    start_time: Start time in "YYYY-MM-DD HH:MM:SS" format. Optional if duration is provided alone.
+    end_time: End time in "YYYY-MM-DD HH:MM:SS" format. Optional if duration is provided.
+    duration: Duration string (e.g., "5m", "10m", "1h"). Can be used alone for "last N minutes".
+    preset: Bundle preset type. Defaults to "standard". Valid: standard, default, debug, micro, mini, management, performance, traces_and_metrics, nfsv3, nfsv4, smb, s3, estore, raid, hardware, permission_issues, rca, dr, inspect_metadata.
+    aggregated: Whether to aggregate bundle data. Defaults to False.
+    text: Whether to include text output. Defaults to False.
+    obfuscated: Whether to encrypt private data. Defaults to False.
+    cnodes_only: Include only cnode data. Defaults to False.
+    dnodes_only: Include only dnode data. Defaults to False.
+    send_now: Upload bundle to VAST support immediately. Defaults to False.
+    cnode_ids: Comma-separated cnode IDs to include.
+    dnode_ids: Comma-separated dnode IDs to include.
+    cnode_filter: Name prefix/pattern to resolve cnode IDs (e.g., "cnode-128*").
+    dnode_filter: Name prefix/pattern to resolve dnode IDs (e.g., "dnode-5*").
+    luna_args: Luna arguments string (e.g., "perf_overview").
+Returns:
+    A dictionary containing bundle creation details."""
+    )
+
+
+def handle_create_support_bundle_command(args):
+    """Handle create support-bundle command"""
+    def _build_kwargs(args):
+        return {
+            'cluster': args.cluster,
+            'prefix': args.prefix,
+            'start_time': getattr(args, 'start_time', None),
+            'end_time': getattr(args, 'end_time', None),
+            'duration': getattr(args, 'duration', None),
+            'preset': getattr(args, 'preset', 'standard') or 'standard',
+            'aggregated': getattr(args, 'aggregated', False),
+            'text': getattr(args, 'text', False),
+            'obfuscated': getattr(args, 'obfuscated', False),
+            'cnodes_only': getattr(args, 'cnodes_only', False),
+            'dnodes_only': getattr(args, 'dnodes_only', False),
+            'send_now': getattr(args, 'send_now', False),
+            'cnode_ids': getattr(args, 'cnode_ids', None),
+            'dnode_ids': getattr(args, 'dnode_ids', None),
+            'cnode_filter': getattr(args, 'cnode_filter', None),
+            'dnode_filter': getattr(args, 'dnode_filter', None),
+            'luna_args': getattr(args, 'luna_args', None),
+        }
+
+    def _execute_support_bundle():
+        kwargs = _build_kwargs(args)
+        results = create_support_bundle(**kwargs)
+        return [results]
+
+    _handle_command_execution(
+        func=_execute_support_bundle,
+        args=args,
+        command_name="create-support_bundles",
+        mcp_code_generator=_generate_create_support_bundle_mcp_code
+    )
+
+
 def handle_mcpsetup_command(args) -> None:
     """Handle the mcpsetup command."""
     try:
@@ -2587,7 +2656,107 @@ def main():
         action='store_true',
         help='Show MCP tool structure and debugging information instead of executing the command'
     )
-    
+
+    # Create support_bundles command
+    create_support_bundle_parser = create_subparsers.add_parser('support_bundles', help='Create a support bundle on a VAST cluster')
+    create_support_bundle_parser.add_argument(
+        '--cluster', '-c',
+        required=True,
+        help='Target cluster address or name (required)'
+    )
+    create_support_bundle_parser.add_argument(
+        '--prefix',
+        required=True,
+        help='Bundle name/prefix (required)'
+    )
+    create_support_bundle_parser.add_argument(
+        '--start-time',
+        help='Start time in "YYYY-MM-DD HH:MM:SS" format'
+    )
+    create_support_bundle_parser.add_argument(
+        '--end-time',
+        help='End time in "YYYY-MM-DD HH:MM:SS" format'
+    )
+    create_support_bundle_parser.add_argument(
+        '--duration',
+        help='Duration string (e.g., "5m", "10m", "1h"). Can be used alone for "last N minutes"'
+    )
+    create_support_bundle_parser.add_argument(
+        '--preset',
+        default='standard',
+        help='Bundle preset type (default: standard). Valid: standard, default, debug, micro, mini, management, performance, traces_and_metrics, nfsv3, nfsv4, smb, s3, estore, raid, hardware, permission_issues, rca, dr, inspect_metadata'
+    )
+    create_support_bundle_parser.add_argument(
+        '--aggregated',
+        action='store_true',
+        help='Aggregate bundle data'
+    )
+    create_support_bundle_parser.add_argument(
+        '--text',
+        action='store_true',
+        help='Include text output'
+    )
+    create_support_bundle_parser.add_argument(
+        '--obfuscated',
+        action='store_true',
+        help='Encrypt private data in the bundle'
+    )
+    create_support_bundle_parser.add_argument(
+        '--cnodes-only',
+        action='store_true',
+        help='Include only cnode data'
+    )
+    create_support_bundle_parser.add_argument(
+        '--dnodes-only',
+        action='store_true',
+        help='Include only dnode data'
+    )
+    create_support_bundle_parser.add_argument(
+        '--send-now',
+        action='store_true',
+        help='Upload bundle to VAST support immediately'
+    )
+    create_support_bundle_parser.add_argument(
+        '--cnode-ids',
+        help='Comma-separated cnode IDs to include'
+    )
+    create_support_bundle_parser.add_argument(
+        '--dnode-ids',
+        help='Comma-separated dnode IDs to include'
+    )
+    create_support_bundle_parser.add_argument(
+        '--cnode-filter',
+        help='Name prefix/pattern to resolve cnode IDs (e.g., "cnode-128*")'
+    )
+    create_support_bundle_parser.add_argument(
+        '--dnode-filter',
+        help='Name prefix/pattern to resolve dnode IDs (e.g., "dnode-5*")'
+    )
+    create_support_bundle_parser.add_argument(
+        '--luna-args',
+        help='Luna arguments string (e.g., "perf_overview")'
+    )
+    create_support_bundle_parser.add_argument(
+        '--format', '-f',
+        choices=['table', 'json', 'csv'],
+        default='table',
+        help='Output format (default: table)'
+    )
+    create_support_bundle_parser.add_argument(
+        '--output', '-o',
+        help='Output file path (optional)'
+    )
+    create_support_bundle_parser.add_argument(
+        '--debug', '-d',
+        action='store_true',
+        help='Log debug messages to console'
+    )
+    create_support_bundle_parser.add_argument(
+        '--mcp',
+        action='store_true',
+        help='Show MCP tool structure and debugging information instead of executing the command'
+    )
+
     # Check for --mcp flag in create commands before parsing
     # If present, make required arguments optional so we can show MCP code
     if 'create' in sys.argv and '--mcp' in sys.argv:
@@ -2602,7 +2771,8 @@ def main():
                     'view-from-template': create_view_template_parser,
                     'snapshot': create_snapshot_parser,
                     'clone': create_clone_parser,
-                    'quota': create_quota_parser
+                    'quota': create_quota_parser,
+                    'support_bundles': create_support_bundle_parser
                 }
                 subparser = subparser_map.get(subcommand)
                 if subparser:
@@ -2756,6 +2926,8 @@ def main():
             handle_create_clone_command(args)
         elif args.create_command == 'quota':
             handle_create_quota_command(args)
+        elif args.create_command == 'support_bundles':
+            handle_create_support_bundle_command(args)
         else:
             print(f"Unknown create command: {args.create_command}", file=sys.stderr)
             create_parser.print_help()

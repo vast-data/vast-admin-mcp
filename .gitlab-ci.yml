@@ -96,7 +96,7 @@ scan_repo [trufflehog]:
 scan_repo [trivy]:
   stage: security
   variables:
-    TRIVY_VERSION: "0.68.2"
+    TRIVY_VERSION: "0.69.3"
   before_script:
     - curl -sSfL https://raw.githubusercontent.com/aquasecurity/trivy/main/contrib/install.sh | sudo sh -s -- -b /usr/bin v${TRIVY_VERSION}
   script:

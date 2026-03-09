@@ -92,7 +92,7 @@ create dataflow diagram for cluster1 for /path view on the tenant3 tenant for th
 show me dataflow diagram for 172.21.224.139 on cluster1
 Show me the hardware topology for cluster cluster1 
 Are there any issues with my configured data protection relationships ? 
-Create a comprehensive report comparing all clusters
+Create mini support bundle on cluster1 and name it bundle1. Timeframe should be yesterday at midnight for 4m. Generate it only for cnodes prefixed by cnode-128 and upload it to support without private data.
 Find all users prefixed with "s3" on cluster cluster1 tenant tenant1
 Are there any critical alerts on my clusters that were not acknoledged ?
 List all snapshots for view path /data/app1 on cluster cluster1 tenant tenant1
@@ -208,7 +208,7 @@ docker run --rm -it \
 
 ```bash
 # Optional: Set version (defaults to 0.1.3)
-export VERSION=0.1.9
+export VERSION=0.2.0
 
 # Start container in background
 docker-compose up -d

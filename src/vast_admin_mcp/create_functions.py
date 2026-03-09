@@ -1,5 +1,6 @@
 """Core business logic functions for vast-admin-mcp: create operations."""
 
+import fnmatch
 import json
 import re
 import uuid
@@ -843,5 +844,261 @@ def create_quota(
         }
     except Exception as e:
         logging.error(f"Failed to create/update quota on {cluster_address}. Error: {e}")
+        raise
+
+
+VALID_SUPPORT_BUNDLE_PRESETS = {
+    'standard', 'default', 'debug', 'micro', 'mini', 'management',
+    'performance', 'traces_and_metrics', 'nfsv3', 'nfsv4', 'smb', 's3',
+    'estore', 'raid', 'hardware', 'permission_issues', 'rca', 'dr',
+    'inspect_metadata',
+}
+
+
+def _normalize_timestamp(value: str, target_fmt: str) -> str:
+    """Try multiple common timestamp formats and return the value in target_fmt.
+
+    Handles ISO 8601 variants (with T, with Z, with timezone offset) as well as
+    the plain "YYYY-MM-DD HH:MM:SS" format the API expects.
+    """
+    value = value.strip()
+    # Strip trailing 'Z' or timezone offset for parsing
+    clean = value.replace('Z', '').rstrip()
+    # Remove timezone offset like +00:00 or -05:00
+    if re.match(r'.*[+-]\d{2}:\d{2}$', clean):
+        clean = clean[:-6]
+
+    candidate_formats = [
+        target_fmt,               # "2026-03-07 00:00:00"
+        "%Y-%m-%dT%H:%M:%S",     # "2026-03-07T00:00:00"
+        "%Y-%m-%dT%H:%M:%S.%f",  # "2026-03-07T00:00:00.123456"
+        "%Y-%m-%d %H:%M:%S.%f",  # "2026-03-07 00:00:00.123456"
+        "%Y-%m-%d %H:%M",        # "2026-03-07 00:00"
+        "%Y-%m-%dT%H:%M",        # "2026-03-07T00:00"
+        "%Y-%m-%d",              # "2026-03-07"
+    ]
+    for fmt in candidate_formats:
+        try:
+            dt = datetime.strptime(clean, fmt)
+            return dt.strftime(target_fmt)
+        except ValueError:
+            continue
+    raise ValueError(
+        f"Cannot parse timestamp '{value}'. "
+        f"Expected format: YYYY-MM-DD HH:MM:SS (e.g., '2026-03-07 00:00:00')"
+    )
+
+
+def _resolve_node_ids(
+    client,
+    endpoint: str,
+    name_filter: str,
+    whitelist
+) -> tuple:
+    """Resolve node IDs from a name filter/pattern by querying the cnodes or dnodes endpoint.
+
+    Args:
+        client: VAST client instance.
+        endpoint: 'cnodes' or 'dnodes'.
+        name_filter: Name prefix or wildcard pattern (fnmatch-style).
+        whitelist: API whitelist dict.
+
+    Returns:
+        Tuple of (comma-separated IDs string, list of matched node names).
+    """
+    nodes = call_vast_api(
+        client=client,
+        endpoint=endpoint,
+        method='get',
+        params={'page': 1, 'page_size': 5000},
+        whitelist=whitelist,
+    )
+
+    if '*' not in name_filter and '?' not in name_filter:
+        name_filter = name_filter + '*'
+
+    matched = [
+        (str(n['id']), n.get('display_name', n.get('name', '')))
+        for n in nodes
+        if fnmatch.fnmatch(n.get('display_name', n.get('name', '')), name_filter)
+    ]
+
+    if not matched:
+        raise ValueError(
+            f"No {endpoint} matched the filter '{name_filter}'. "
+            f"Available names: {', '.join(n.get('display_name', n.get('name', '')) for n in nodes[:20])}"
+        )
+
+    matched_ids = [m[0] for m in matched]
+    matched_names = [m[1] for m in matched]
+    logging.info(f"Resolved {len(matched)} {endpoint} from filter '{name_filter}': {', '.join(matched_names)}")
+    return ','.join(matched_ids), matched_names
+
+
+def create_support_bundle(
+    cluster: str,
+    prefix: str,
+    start_time: Optional[str] = None,
+    end_time: Optional[str] = None,
+    duration: Optional[str] = None,
+    preset: str = 'standard',
+    aggregated: bool = False,
+    text: bool = False,
+    obfuscated: bool = False,
+    cnodes_only: bool = False,
+    dnodes_only: bool = False,
+    send_now: bool = False,
+    cnode_ids: Optional[str] = None,
+    dnode_ids: Optional[str] = None,
+    cnode_filter: Optional[str] = None,
+    dnode_filter: Optional[str] = None,
+    luna_args: Optional[str] = None,
+) -> Dict[str, Any]:
+    """Create a support bundle on a VAST cluster.
+
+    Args:
+        cluster: Cluster address or name. Required.
+        prefix: Bundle name/prefix. Required.
+        start_time: Start time in "YYYY-MM-DD HH:MM:SS" format. Optional.
+        end_time: End time in "YYYY-MM-DD HH:MM:SS" format. Optional.
+        duration: Duration string (e.g. "5m", "10m", "1h"). When provided alone, means "last N minutes" (end=now, start=now-duration). Can also combine with start_time or end_time.
+        preset: Bundle preset type. Defaults to 'standard'.
+        aggregated: Whether to aggregate the bundle. Defaults to False.
+        text: Whether to include text output. Defaults to False.
+        obfuscated: Whether to encrypt private data. Defaults to False.
+        cnodes_only: Include only cnode data. Defaults to False.
+        dnodes_only: Include only dnode data. Defaults to False.
+        send_now: Upload bundle to VAST support immediately. Defaults to False.
+        cnode_ids: Comma-separated cnode IDs to include.
+        dnode_ids: Comma-separated dnode IDs to include.
+        cnode_filter: Name prefix/pattern to resolve cnode IDs (e.g. "cnode-128*").
+        dnode_filter: Name prefix/pattern to resolve dnode IDs (e.g. "dnode-5*").
+        luna_args: Luna arguments string (e.g. "perf_overview").
+
+    Returns:
+        Summary dict with bundle creation details.
+    """
+    config = load_config()
+    cluster_address, cluster_config, _ = resolve_cluster_identifier(cluster, config)
+
+    preset = preset.lower().strip()
+    if preset not in VALID_SUPPORT_BUNDLE_PRESETS:
+        raise ValueError(
+            f"Invalid preset '{preset}'. Must be one of: {', '.join(sorted(VALID_SUPPORT_BUNDLE_PRESETS))}"
+        )
+
+    # --- Normalize timestamps to "YYYY-MM-DD HH:MM:SS" ---
+    api_time_fmt = "%Y-%m-%d %H:%M:%S"
+    start_time = _normalize_timestamp(start_time, api_time_fmt) if start_time else None
+    end_time = _normalize_timestamp(end_time, api_time_fmt) if end_time else None
+
+    # --- Time resolution ---
+    duration_seconds = parse_time_duration(duration) if duration else None
+
+    if start_time and end_time:
+        pass  # both provided explicitly
+    elif start_time and not end_time:
+        if not duration_seconds:
+            raise ValueError("Either end_time or duration must be provided when start_time is given.")
+        dt_start = datetime.strptime(start_time, api_time_fmt)
+        dt_end = dt_start + timedelta(seconds=duration_seconds)
+        end_time = dt_end.strftime(api_time_fmt)
+    elif end_time and not start_time:
+        if not duration_seconds:
+            raise ValueError("Either start_time or duration must be provided when end_time is given.")
+        dt_end = datetime.strptime(end_time, api_time_fmt)
+        dt_start = dt_end - timedelta(seconds=duration_seconds)
+        start_time = dt_start.strftime(api_time_fmt)
+    elif duration_seconds and not start_time and not end_time:
+        dt_end = datetime.now(timezone.utc).replace(tzinfo=None)
+        dt_start = dt_end - timedelta(seconds=duration_seconds)
+        start_time = dt_start.strftime(api_time_fmt)
+        end_time = dt_end.strftime(api_time_fmt)
+        logging.info(f"Relative time: using last {duration} -> {start_time} to {end_time}")
+    else:
+        raise ValueError(
+            "Time must be specified. Provide one of: "
+            "(1) duration alone for 'last N minutes', "
+            "(2) start_time + duration, "
+            "(3) end_time + duration, or "
+            "(4) start_time + end_time."
+        )
+
+    client = create_vast_client(cluster_address)
+    whitelist = get_api_whitelist()
+
+    # --- Resolve node IDs from filters ---
+    resolved_cnode_names: List[str] = []
+    resolved_dnode_names: List[str] = []
+    if cnode_filter and not cnode_ids:
+        cnode_ids, resolved_cnode_names = _resolve_node_ids(client, 'cnodes', cnode_filter, whitelist)
+    if dnode_filter and not dnode_ids:
+        dnode_ids, resolved_dnode_names = _resolve_node_ids(client, 'dnodes', dnode_filter, whitelist)
+
+    # --- Build payload ---
+    payload: Dict[str, Any] = {
+        'prefix': prefix,
+        'aggregated': aggregated,
+        'preset': preset,
+        'text': text,
+        'obfuscated': obfuscated,
+        'cnodes_only': cnodes_only,
+        'dnodes_only': dnodes_only,
+        'send_now': send_now,
+        'start_time': start_time,
+        'end_time': end_time,
+    }
+    if cnode_ids:
+        payload['cnode_ids'] = cnode_ids
+    if dnode_ids:
+        payload['dnode_ids'] = dnode_ids
+    if luna_args:
+        payload['luna_args'] = luna_args
+
+    try:
+        logging.info(
+            f"Creating support bundle on cluster={cluster_address} "
+            f"prefix='{prefix}' preset={preset} "
+            f"time={start_time} -> {end_time} "
+            f"send_now={send_now} obfuscated={obfuscated}"
+        )
+
+        result = call_vast_api(
+            client=client,
+            endpoint='supportbundles',
+            method='post',
+            params=payload,
+            whitelist=whitelist,
+        )
+
+        bundle = result[0] if isinstance(result, list) and result else result
+        logging.info(f"Support bundle created successfully: id={bundle.get('id')} state={bundle.get('state')}")
+
+        summary: Dict[str, Any] = {
+            'Cluster': cluster_address,
+            'ID': bundle.get('id'),
+            'Name': bundle.get('name'),
+            'State': bundle.get('state'),
+            'Preset': bundle.get('preset'),
+            'Start Time': bundle.get('start_time'),
+            'End Time': bundle.get('end_time'),
+            'Bundle File': bundle.get('bundle_file'),
+            'Bundle URL': bundle.get('bundle_url'),
+            'Send Now': send_now,
+            'Obfuscated': obfuscated,
+            'CNodes Only': cnodes_only,
+            'DNodes Only': dnodes_only,
+            'CNode IDs': bundle.get('cnode_ids', ''),
+            'DNode IDs': bundle.get('dnode_ids', ''),
+            'Luna Args': bundle.get('luna_args', ''),
+            'Position in Queue': bundle.get('position_in_queue'),
+        }
+        if resolved_cnode_names:
+            summary['CNode Names'] = ', '.join(resolved_cnode_names)
+        if resolved_dnode_names:
+            summary['DNode Names'] = ', '.join(resolved_dnode_names)
+        return summary
+    except Exception as e:
+        logging.error(f"Failed to create support bundle on {cluster_address}. Error: {e}")
         raise
 
