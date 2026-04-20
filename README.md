@@ -12,10 +12,12 @@ VAST Admin MCP Server is a Model Context Protocol (MCP) server for VAST Data adm
 ## Features
 
 - **MCP Integration**: Full MCP server implementation for AI assistant integration
+- **Network Deployment**: HTTP transport for remote access, Kubernetes, and containerized deployments
 - **Cluster Management**: List and monitor VAST clusters
 - **Performance Metrics**: Retrieve performance data for cluster objects and graphs generation
 - **Dynamic List Functions**: Automatically generate MCP functions from YAML templates for end user modifications
-- **Secure Credentials**: Secure password storage using keyring
+- **Secure Credentials**: Secure password storage using keyring, with K8s Secrets API support
+- **Authentication**: Bearer token and OAuth/OIDC support for network deployments
 - **Read-only and Read-write Modes**: Control access level (read-write mode for create operations)
 
 ## Quick Start
@@ -147,6 +149,22 @@ sudo yum install jq
 pip install vast-admin-mcp
 ```
 
+### Optional Dependencies
+
+```bash
+# HTTP server support (for network deployment)
+pip install 'vast-admin-mcp[http]'
+
+# Kubernetes secrets support
+pip install 'vast-admin-mcp[k8s]'
+
+# SOCKS proxy support
+pip install 'vast-admin-mcp[socks]'
+
+# All optional dependencies
+pip install 'vast-admin-mcp[all]'
+```
+
 ## Docker Installation
 
 ### Building the Docker Image
@@ -208,7 +226,7 @@ docker run --rm -it \
 
 ```bash
 # Optional: Set version (defaults to 0.1.3)
-export VERSION=0.2.0
+export VERSION=0.2.1
 
 # Start container in background
 docker-compose up -d
@@ -297,6 +315,191 @@ export DOCKER_IMAGE=vast-admin-mcp:latest
 export DOCKER_TEMPLATE_FILE=/path/to/custom-template.yaml
 ./vast-admin-mcp-docker.sh list clusters
 ```
+
+## Network Deployment (HTTP)
+
+By default, the MCP server uses stdio transport for desktop AI assistant integration. For network access (remote clients, Kubernetes, containerized deployments), you can run the server with HTTP transport.
+
+### Starting the HTTP Server
+
+```bash
+# Basic HTTP server on localhost
+vast-admin-mcp mcp --transport http
+
+# HTTP server accessible from network
+vast-admin-mcp mcp --transport http --host 0.0.0.0 --port 8000
+
+# With authentication (recommended)
+export VAST_ADMIN_MCP_AUTH_TOKEN="your-secure-token"
+vast-admin-mcp mcp --transport http --host 0.0.0.0
+
+# With SSL/TLS
+vast-admin-mcp mcp --transport http --host 0.0.0.0 \
+    --ssl-cert /path/to/cert.pem \
+    --ssl-key /path/to/key.pem
+```
+
+The server exposes:
+- **MCP endpoint**: `http://hostname:8000/mcp/`
+- **Health check**: `http://hostname:8000/health`
+
+### Authentication
+
+#### Bearer Token (Simple)
+
+Set the `VAST_ADMIN_MCP_AUTH_TOKEN` environment variable:
+
+```bash
+export VAST_ADMIN_MCP_AUTH_TOKEN="vamt_your-secure-token"
+vast-admin-mcp mcp --transport http --host 0.0.0.0
+```
+
+Clients must include the header: `Authorization: Bearer vamt_your-secure-token`
+
+#### OAuth/OIDC (Production)
+
+Configure OAuth via the setup command:
+
+```bash
+vast-admin-mcp setup
+# Select option 5: Configure HTTP server settings
+# Select option 2 or 3 for OAuth configuration
+```
+
+Supports:
+- Built-in providers: GitHub, Google, Azure AD
+- Generic OAuth/OIDC: Okta, Keycloak, Auth0, or any OIDC-compliant provider
+
+### SSL/TLS
+
+#### Generate Self-Signed Certificate
+
+```bash
+# Generate certificate (stored in ~/.vast-admin-mcp/ssl/)
+vast-admin-mcp gencert
+
+# With custom options
+vast-admin-mcp gencert --cn mcp.example.com --days 365
+
+# Add additional Subject Alternative Names
+vast-admin-mcp gencert --san mcp.example.com --san 192.168.1.100
+```
+
+#### Use with HTTP Server
+
+```bash
+vast-admin-mcp mcp --transport http --host 0.0.0.0 \
+    --ssl-cert ~/.vast-admin-mcp/ssl/cert.pem \
+    --ssl-key ~/.vast-admin-mcp/ssl/key.pem
+```
+
+### Docker HTTP Mode
+
+```bash
+# Start in HTTP mode
+MCP_TRANSPORT=http docker-compose up -d
+
+# With authentication
+VAST_ADMIN_MCP_AUTH_TOKEN="your-token" MCP_TRANSPORT=http docker-compose up -d
+
+# Server available at http://localhost:8000/mcp/
+```
+
+### Kubernetes / OpenShift Deployment
+
+Complete Kubernetes and OpenShift manifests are provided in [`deploy/kubernetes/`](deploy/kubernetes/). 
+See the [Kubernetes Deployment Guide](deploy/kubernetes/README.md) for detailed instructions.
+
+#### Quick Start
+
+```bash
+# 1. Create namespace
+kubectl create namespace vast-admin-mcp
+
+# 2. Edit vast-admin-mcp.yaml with your credentials and cluster config
+
+# 3. Deploy (HTTP)
+kubectl apply -f deploy/kubernetes/vast-admin-mcp.yaml -n vast-admin-mcp
+
+# For HTTPS: create TLS secret and enable HTTPS in the manifest (see comments)
+./deploy/kubernetes/create-tls-secret.sh -n vast-admin-mcp
+```
+
+#### Available Manifests
+
+| File | Description |
+|------|-------------|
+| `vast-admin-mcp.yaml` | Main deployment manifest (HTTP/HTTPS) |
+| `openshift-route.yaml` | OpenShift Route configuration |
+| `create-tls-secret.sh` | Helper script for TLS certificates |
+
+#### Access Methods
+
+| Method | URL | Use Case |
+|--------|-----|----------|
+| NodePort | `http(s)://<node-ip>:30800/mcp/` | Simple external access |
+| Ingress | `https://mcp.example.com/mcp/` | Domain-based access with TLS termination |
+| OpenShift Route | `https://mcp.apps.cluster.com/mcp/` | OpenShift native |
+| ClusterIP + Port Forward | `http://localhost:8000/mcp/` | Development/testing |
+
+#### K8s Secrets Integration
+
+The application reads credentials from Kubernetes Secrets using the pattern:
+```
+k8s:<namespace>/<secret-name>/<key>
+```
+
+Example in config.json:
+```json
+{
+  "clusters": [{
+    "cluster": "vms1.example.com",
+    "password": "k8s:vast-admin-mcp/vast-admin-mcp-secrets/vms1-password"
+  }],
+  "http_server": {
+    "auth": {
+      "type": "bearer",
+      "token": "k8s:vast-admin-mcp/vast-admin-mcp-secrets/auth-token"
+    }
+  }
+}
+```
+
+#### OpenShift
+
+For OpenShift, use the Route for external access:
+
+```bash
+oc apply -f deploy/kubernetes/vast-admin-mcp.yaml -n vast-admin-mcp
+oc apply -f deploy/kubernetes/openshift-route.yaml -n vast-admin-mcp
+```
+
+The Route supports edge (default), passthrough, and re-encrypt TLS termination modes.
+
+### Setup Menu for HTTP Configuration
+
+Run `vast-admin-mcp setup` to interactively configure HTTP server settings:
+
+```
+VAST Admin MCP - Configuration Management
+==========================================
+HTTP Server: Disabled
+
+Available options:
+  5. Configure HTTP server settings
+  6. Manage authentication token
+```
+
+Option 5 allows you to configure:
+- Enable/disable HTTP server
+- Host, port, and URL path
+- Authentication (bearer token, OAuth, or none)
+- SSL/TLS (existing certs, generate self-signed, or none)
+
+Option 6 allows you to:
+- Generate new authentication tokens
+- View or export current token
+- Rotate tokens
 
 ## CLI
 
@@ -399,6 +602,15 @@ The following create tools are available when the MCP server is started with `--
 - **Log Files**: `~/.vast-admin-mcp/vast_admin_mcp.log`
 
 ### Environment Variables
+
+#### Authentication
+
+- `VAST_ADMIN_MCP_AUTH_TOKEN`: Bearer token for HTTP authentication
+
+```bash
+export VAST_ADMIN_MCP_AUTH_TOKEN="vamt_your-secure-token"
+vast-admin-mcp mcp --transport http --host 0.0.0.0
+```
 
 #### Template File Paths
 

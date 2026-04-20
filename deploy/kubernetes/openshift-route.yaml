@@ -1,0 +1,95 @@
+# OpenShift Route for VAST Admin MCP Server
+#
+# Use this instead of Ingress on OpenShift clusters. OpenShift Routes provide
+# native integration with the OpenShift router and support for edge, passthrough,
+# and re-encrypt TLS termination.
+#
+# Usage:
+#   1. Deploy the main manifest first: oc apply -f vast-admin-mcp.yaml
+#   2. Apply this route: oc apply -f openshift-route.yaml
+#
+# TLS Termination Options:
+#   - edge:       TLS terminates at the router (HTTP to pod) - DEFAULT
+#   - passthrough: TLS passes through to the pod (requires pod HTTPS)
+#   - reencrypt:   Router decrypts and re-encrypts to pod
+
+---
+# Route with Edge TLS Termination (recommended for HTTP pods)
+# The OpenShift router handles TLS, traffic to pod is HTTP
+apiVersion: route.openshift.io/v1
+kind: Route
+metadata:
+  name: vast-admin-mcp
+  labels:
+    app: vast-admin-mcp
+  annotations:
+    # Timeout for long-running MCP operations
+    haproxy.router.openshift.io/timeout: 300s
+spec:
+  # Update with your OpenShift apps domain
+  # Format: <app-name>-<namespace>.apps.<cluster-domain>
+  host: vast-admin-mcp.apps.example.com
+  to:
+    kind: Service
+    name: vast-admin-mcp
+    weight: 100
+  port:
+    targetPort: http
+  tls:
+    termination: edge
+    insecureEdgeTerminationPolicy: Redirect
+  wildcardPolicy: None
+
+---
+# Alternative: Route with Passthrough TLS Termination
+# Use this with vast-admin-mcp-https.yaml deployment
+# The pod handles TLS directly (end-to-end encryption)
+# apiVersion: route.openshift.io/v1
+# kind: Route
+# metadata:
+#   name: vast-admin-mcp-passthrough
+#   labels:
+#     app: vast-admin-mcp
+#   annotations:
+#     haproxy.router.openshift.io/timeout: 300s
+# spec:
+#   host: vast-admin-mcp.apps.example.com
+#   to:
+#     kind: Service
+#     name: vast-admin-mcp
+#     weight: 100
+#   port:
+#     targetPort: https
+#   tls:
+#     termination: passthrough
+#   wildcardPolicy: None
+
+---
+# Alternative: Route with Re-encrypt TLS Termination
+# Router terminates external TLS, then creates new TLS connection to pod
+# Provides end-to-end encryption with certificate verification
+# apiVersion: route.openshift.io/v1
+# kind: Route
+# metadata:
+#   name: vast-admin-mcp-reencrypt
+#   labels:
+#     app: vast-admin-mcp
+#   annotations:
+#     haproxy.router.openshift.io/timeout: 300s
+# spec:
+#   host: vast-admin-mcp.apps.example.com
+#   to:
+#     kind: Service
+#     name: vast-admin-mcp
+#     weight: 100
+#   port:
+#     targetPort: https
+#   tls:
+#     termination: reencrypt
+#     # Optional: Provide destination CA certificate for pod verification
+#     # destinationCACertificate: |
+#     #   -----BEGIN CERTIFICATE-----
+#     #   ...
+#     #   -----END CERTIFICATE-----
+#     insecureEdgeTerminationPolicy: Redirect
+#   wildcardPolicy: None

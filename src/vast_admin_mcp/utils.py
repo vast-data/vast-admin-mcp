@@ -38,9 +38,80 @@ except ImportError:
     CRYPTO_AVAILABLE = False
     logging.warning("cryptography library not available. Passwords will be stored with base64 encoding (NOT secure).")
 
+# Try to import kubernetes for K8s secrets API
+try:
+    from kubernetes import client as k8s_client, config as k8s_config
+    K8S_AVAILABLE = True
+except ImportError:
+    K8S_AVAILABLE = False
+
+# Cache for K8s API client initialization
+_k8s_initialized = False
+
 def _get_keyring_service_name():
     """Get the keyring service name for this application"""
     return "vast-admin-mcp"
+
+
+def _init_k8s_client():
+    """Initialize Kubernetes client (auto-detect in-cluster vs kubeconfig)."""
+    global _k8s_initialized
+    if _k8s_initialized:
+        return
+    
+    if not K8S_AVAILABLE:
+        raise ValueError("kubernetes library not installed. Install with: pip install vast-admin-mcp[k8s]")
+    
+    try:
+        # Try in-cluster config first (running inside K8s pod)
+        k8s_config.load_incluster_config()
+        logging.debug("Initialized K8s client with in-cluster config")
+    except k8s_config.ConfigException:
+        try:
+            # Fall back to kubeconfig (running locally)
+            k8s_config.load_kube_config()
+            logging.debug("Initialized K8s client with kubeconfig")
+        except k8s_config.ConfigException as e:
+            raise ValueError(f"Failed to initialize Kubernetes client: {e}")
+    
+    _k8s_initialized = True
+
+
+def _get_k8s_secret(namespace: str, secret_name: str, key: str) -> str:
+    """Read secret value directly from Kubernetes API.
+    
+    Args:
+        namespace: Kubernetes namespace
+        secret_name: Name of the Secret resource
+        key: Key within the secret's data
+        
+    Returns:
+        The decoded secret value
+        
+    Raises:
+        ValueError: If secret not found, permission denied, or key not in secret
+    """
+    _init_k8s_client()
+    
+    try:
+        v1 = k8s_client.CoreV1Api()
+        secret = v1.read_namespaced_secret(secret_name, namespace)
+        
+        if secret.data is None or key not in secret.data:
+            raise ValueError(f"Key '{key}' not found in secret '{namespace}/{secret_name}'")
+        
+        # K8s secrets are base64 encoded
+        return base64.b64decode(secret.data[key]).decode('utf-8')
+    
+    except k8s_client.exceptions.ApiException as e:
+        if e.status == 403:
+            raise ValueError(
+                f"Permission denied reading secret '{namespace}/{secret_name}'. "
+                f"Ensure ServiceAccount has 'get' permission on secrets."
+            )
+        elif e.status == 404:
+            raise ValueError(f"Secret '{namespace}/{secret_name}' not found")
+        raise ValueError(f"Failed to read K8s secret: {e}")
 
 def _get_encryption_key():
     """Generate or retrieve encryption key for password encryption"""
@@ -113,7 +184,33 @@ def store_password_secure(cluster: str, username: str, password: str) -> str:
 def retrieve_password_secure(cluster: str, username: str, password_ref: str) -> str:
     """
     Retrieve password securely based on the storage method used.
+    
+    Supports multiple storage methods:
+    - k8s:<namespace>/<secret-name>/<key> - Kubernetes Secrets API
+    - env:<VAR_NAME> - Environment variable
+    - keyring:<account> - OS keyring
+    - encrypted:<data> - Encrypted file storage
+    - base64:<data> - Base64 encoded (legacy, not secure)
     """
+    # Kubernetes Secrets API (k8s:namespace/secret-name/key)
+    if password_ref.startswith("k8s:"):
+        parts = password_ref[4:].split("/", 2)
+        if len(parts) != 3:
+            raise ValueError(
+                f"Invalid k8s secret reference: {password_ref}. "
+                f"Expected format: k8s:namespace/secret-name/key"
+            )
+        namespace, secret_name, key = parts
+        return _get_k8s_secret(namespace, secret_name, key)
+    
+    # Environment variable (env:VAR_NAME)
+    if password_ref.startswith("env:"):
+        env_var = password_ref[4:]
+        value = os.environ.get(env_var)
+        if value:
+            return value
+        raise ValueError(f"Environment variable '{env_var}' not set")
+    
     if password_ref.startswith("keyring:"):
         if not KEYRING_AVAILABLE:
             raise ValueError("Password stored in keyring but keyring library not available")

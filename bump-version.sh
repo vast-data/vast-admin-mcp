@@ -8,6 +8,7 @@ README_FILE="README.md"
 DOCKER_COMPOSE_FILE="docker-compose.yml"
 DOCKERFILE="Dockerfile"
 DOCKER_SCRIPT="vast-admin-mcp-docker.sh"
+K8S_MANIFEST="deploy/kubernetes/vast-admin-mcp.yaml"
 
 # Function to display usage
 usage() {
@@ -100,6 +101,11 @@ sed -i.bak "s|vastdataorg/vast-admin-mcp:${CURRENT_VERSION}|vastdataorg/vast-adm
 rm -f "${DOCKER_SCRIPT}.bak"
 echo "✅ Version updated in ${DOCKER_SCRIPT}"
 
+# Update version in Kubernetes manifest (image: docker.io/vastdataorg/vast-admin-mcp:0.2.1)
+sed -i.bak "s|vastdataorg/vast-admin-mcp:${CURRENT_VERSION}|vastdataorg/vast-admin-mcp:${NEW_VERSION}|g" "$K8S_MANIFEST"
+rm -f "${K8S_MANIFEST}.bak"
+echo "✅ Version updated in ${K8S_MANIFEST}"
+
 echo ""
 echo "📝 Files updated:"
 echo "  - ${ABOUT_FILE}"
@@ -107,10 +113,11 @@ echo "  - ${README_FILE}"
 echo "  - ${DOCKER_COMPOSE_FILE}"
 echo "  - ${DOCKERFILE}"
 echo "  - ${DOCKER_SCRIPT}"
+echo "  - ${K8S_MANIFEST}"
 echo ""
 echo "Next steps:"
-echo "  1. Review changes: git diff ${ABOUT_FILE} ${README_FILE} ${DOCKER_COMPOSE_FILE} ${DOCKERFILE} ${DOCKER_SCRIPT}"
-echo "  2. Commit changes: git add ${ABOUT_FILE} ${README_FILE} ${DOCKER_COMPOSE_FILE} ${DOCKERFILE} ${DOCKER_SCRIPT} && git commit -m \"Bump version to ${NEW_VERSION}\""
+echo "  1. Review changes: git diff ${ABOUT_FILE} ${README_FILE} ${DOCKER_COMPOSE_FILE} ${DOCKERFILE} ${DOCKER_SCRIPT} ${K8S_MANIFEST}"
+echo "  2. Commit changes: git add ${ABOUT_FILE} ${README_FILE} ${DOCKER_COMPOSE_FILE} ${DOCKERFILE} ${DOCKER_SCRIPT} ${K8S_MANIFEST} && git commit -m \"Bump version to ${NEW_VERSION}\""
 echo "  3. Tag release:    git tag -a v${NEW_VERSION} -m \"Release v${NEW_VERSION}\""
 echo "  4. Build package:  make build-python"
 echo "  5. Build Docker:   make build-docker"

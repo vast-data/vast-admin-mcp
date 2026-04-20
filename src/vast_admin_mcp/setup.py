@@ -235,7 +235,7 @@ def setup_config(config_file: str = CONFIG_FILE):
     
     while True:
         print("\n" + "="*60)
-        print("VAST Admin MCP - Cluster configurations Management")
+        print("VAST Admin MCP - Configuration Management")
         print("="*60)
         
         # Display current clusters
@@ -248,12 +248,17 @@ def setup_config(config_file: str = CONFIG_FILE):
         else:
             print("\nNo clusters currently configured.")
         
+        # Display HTTP server status
+        print(f"\nHTTP Server: {get_http_server_status(config)}")
+        
         print("\nAvailable options:")
         print("  1. Add new cluster")
         if config['clusters']:
             print("  2. Edit existing cluster")
             print("  3. Remove cluster")
             print("  4. Test cluster connectivity")
+        print("  5. Configure HTTP server settings")
+        print("  6. Manage authentication token")
         print("  9. Save and exit")
         print("  0. Exit without saving")
         
@@ -314,9 +319,17 @@ def setup_config(config_file: str = CONFIG_FILE):
             if cluster_to_test:
                 _test_cluster_connectivity(cluster_to_test)
         
+        elif choice == '5':
+            # Configure HTTP server
+            config = _configure_http_server(config)
+        
+        elif choice == '6':
+            # Manage authentication token
+            config = _manage_auth_token(config)
+        
         elif choice == '9':
             # Save and exit
-            if config['clusters']:
+            if config['clusters'] or config.get('http_server', {}).get('enabled'):
                 try:
                     with open(config_file, 'w') as f:
                         json.dump(config, f, indent=2)
@@ -326,7 +339,7 @@ def setup_config(config_file: str = CONFIG_FILE):
                     logging.error(f"Error saving configuration: {e}")
                     continue
             else:
-                logging.error("Cannot save empty configuration. Please add at least one cluster.")
+                logging.error("Cannot save empty configuration. Please add at least one cluster or configure HTTP server.")
         
         elif choice == '0':
             # Exit without saving
@@ -542,4 +555,471 @@ def _test_cluster_connectivity(cluster_info):
             
     except Exception as e:
         print(f"❌ Error testing connectivity: {e}")
+
+
+# ============================================================================
+# HTTP Server Configuration Functions
+# ============================================================================
+
+import secrets
+
+TOKEN_PREFIX = "vamt_"  # VAST Admin MCP Token
+
+
+def generate_auth_token(length: int = 32) -> str:
+    """Generate a secure random token with prefix."""
+    random_part = secrets.token_urlsafe(length)
+    return f"{TOKEN_PREFIX}{random_part}"
+
+
+def get_http_server_status(config: dict) -> str:
+    """Get HTTP server configuration status string."""
+    http_config = config.get('http_server', {})
+    if not http_config.get('enabled', False):
+        return "Disabled"
+    
+    parts = [f"port {http_config.get('port', 8000)}"]
+    
+    auth_config = http_config.get('auth', {})
+    auth_type = auth_config.get('type', 'none')
+    if auth_type == 'bearer':
+        parts.append("auth: token")
+    elif auth_type == 'oauth':
+        provider = auth_config.get('provider', 'unknown')
+        parts.append(f"auth: {provider}")
+    else:
+        parts.append("auth: none")
+    
+    ssl_config = http_config.get('ssl', {})
+    if ssl_config.get('enabled', False):
+        parts.append("SSL: enabled")
+    
+    return "Enabled (" + ", ".join(parts) + ")"
+
+
+def _configure_http_server(config: dict) -> dict:
+    """Configure HTTP server settings interactively."""
+    print("\n" + "-" * 50)
+    print("HTTP Server Configuration")
+    print("-" * 50)
+    
+    http_config = config.get('http_server', {})
+    
+    # Show current status
+    print(f"\nCurrent status: {get_http_server_status(config)}")
+    
+    # Enable/disable
+    current_enabled = http_config.get('enabled', False)
+    enable_prompt = "Enable HTTP server?" if not current_enabled else "Keep HTTP server enabled?"
+    enable = query_yes_no(enable_prompt, default="yes" if current_enabled else "no")
+    
+    if not enable:
+        http_config['enabled'] = False
+        config['http_server'] = http_config
+        print("HTTP server disabled.")
+        return config
+    
+    http_config['enabled'] = True
+    
+    # Host/Port configuration
+    current_host = http_config.get('host', '0.0.0.0')
+    current_port = http_config.get('port', 8000)
+    current_path = http_config.get('path', '/mcp/')
+    
+    host = input(f"Bind address [{current_host}]: ").strip() or current_host
+    port_str = input(f"Port [{current_port}]: ").strip()
+    port = int(port_str) if port_str else current_port
+    path = input(f"URL path [{current_path}]: ").strip() or current_path
+    
+    http_config['host'] = host
+    http_config['port'] = port
+    http_config['path'] = path
+    
+    # Authentication configuration
+    print("\nAuthentication:")
+    print("  1. Bearer token (simple shared secret)")
+    print("  2. OAuth provider (GitHub, Google, Azure)")
+    print("  3. Generic OAuth/OIDC (any provider)")
+    print("  4. None (localhost only - not recommended)")
+    
+    auth_choice = input("Select [1]: ").strip() or "1"
+    
+    if auth_choice == '1':
+        http_config['auth'] = _configure_bearer_auth(http_config.get('auth', {}))
+    elif auth_choice == '2':
+        http_config['auth'] = _configure_oauth_provider(http_config.get('auth', {}))
+    elif auth_choice == '3':
+        http_config['auth'] = _configure_generic_oauth(http_config.get('auth', {}))
+    else:
+        http_config['auth'] = {'type': 'none'}
+        print("⚠️  Warning: Running without authentication. Only use on localhost!")
+    
+    # SSL configuration
+    print("\nSSL/TLS:")
+    print("  1. No SSL (use reverse proxy for HTTPS)")
+    print("  2. Enable SSL with certificate files")
+    print("  3. Generate self-signed certificate (development)")
+    
+    ssl_choice = input("Select [1]: ").strip() or "1"
+    
+    if ssl_choice == '2':
+        http_config['ssl'] = _configure_ssl_files(http_config.get('ssl', {}))
+    elif ssl_choice == '3':
+        http_config['ssl'] = _generate_ssl_cert()
+    else:
+        http_config['ssl'] = {'enabled': False}
+    
+    config['http_server'] = http_config
+    print("\n✅ HTTP server configured successfully!")
+    return config
+
+
+def _configure_bearer_auth(current_auth: dict) -> dict:
+    """Configure bearer token authentication."""
+    print("\nBearer token configuration:")
+    print("  1. Generate new token (stored encrypted)")
+    print("  2. Enter token manually (stored encrypted)")
+    print("  3. Use environment variable only")
+    
+    choice = input("Select [1]: ").strip() or "1"
+    
+    if choice == '1':
+        token = generate_auth_token()
+        print(f"\nGenerated token: {token}")
+        
+        # Store encrypted
+        secure_ref = store_password_secure("http_server", "auth_token", token)
+        print("Token stored encrypted in config.")
+        print(f"\nTo use with environment variable:")
+        print(f'  export VAST_ADMIN_MCP_AUTH_TOKEN="{token}"')
+        
+        return {
+            'type': 'bearer',
+            'token': secure_ref
+        }
+    elif choice == '2':
+        from getpass import getpass
+        token = getpass("Enter token: ").strip()
+        if token:
+            secure_ref = store_password_secure("http_server", "auth_token", token)
+            print("Token stored encrypted in config.")
+            return {
+                'type': 'bearer',
+                'token': secure_ref
+            }
+    
+    # Use environment variable only
+    print("Using environment variable VAST_ADMIN_MCP_AUTH_TOKEN")
+    return {
+        'type': 'bearer',
+        'token': 'env:VAST_ADMIN_MCP_AUTH_TOKEN'
+    }
+
+
+def _configure_oauth_provider(current_auth: dict) -> dict:
+    """Configure OAuth provider authentication."""
+    print("\nSelect provider:")
+    print("  1. GitHub")
+    print("  2. Google")
+    print("  3. Azure AD")
+    
+    choice = input("Select [1]: ").strip() or "1"
+    
+    providers = {'1': 'github', '2': 'google', '3': 'azure'}
+    provider = providers.get(choice, 'github')
+    
+    print(f"\n{provider.title()} OAuth Setup:")
+    print("  1. Create an OAuth App in your provider's settings")
+    print("  2. Set the callback URL to: https://your-server.com/auth/callback")
+    
+    client_id = input("\nClient ID: ").strip()
+    if not client_id:
+        print("Client ID is required.")
+        return current_auth
+    
+    from getpass import getpass
+    client_secret = getpass("Client Secret: ").strip()
+    if not client_secret:
+        print("Client Secret is required.")
+        return current_auth
+    
+    base_url = input("Base URL (your server's public URL): ").strip()
+    if not base_url:
+        print("Base URL is required.")
+        return current_auth
+    
+    # Store client secret encrypted
+    secret_ref = store_password_secure("http_server", "oauth_client_secret", client_secret)
+    
+    auth_config = {
+        'type': 'oauth',
+        'provider': provider,
+        'client_id': client_id,
+        'client_secret': secret_ref,
+        'base_url': base_url
+    }
+    
+    if provider == 'azure':
+        tenant_id = input("Tenant ID: ").strip()
+        if tenant_id:
+            auth_config['tenant_id'] = tenant_id
+    
+    print(f"\n✅ {provider.title()} OAuth configured!")
+    return auth_config
+
+
+def _configure_generic_oauth(current_auth: dict) -> dict:
+    """Configure generic OAuth/OIDC provider."""
+    print("\nGeneric OAuth/OIDC Configuration")
+    
+    use_oidc = query_yes_no("Does your provider support OIDC discovery?", default="yes")
+    
+    if use_oidc:
+        oidc_issuer = input("OIDC Issuer URL (e.g., https://your-domain.okta.com): ").strip()
+        if not oidc_issuer:
+            print("OIDC Issuer URL is required.")
+            return current_auth
+        
+        print("\nAuto-discovering endpoints...")
+    else:
+        oidc_issuer = None
+        print("\nManual OAuth endpoint configuration:")
+    
+    client_id = input("Client ID: ").strip()
+    if not client_id:
+        print("Client ID is required.")
+        return current_auth
+    
+    from getpass import getpass
+    client_secret = getpass("Client Secret: ").strip()
+    if not client_secret:
+        print("Client Secret is required.")
+        return current_auth
+    
+    base_url = input("Base URL (your server's public URL): ").strip()
+    if not base_url:
+        print("Base URL is required.")
+        return current_auth
+    
+    # Store client secret encrypted
+    secret_ref = store_password_secure("http_server", "oauth_client_secret", client_secret)
+    
+    auth_config = {
+        'type': 'oauth',
+        'provider': 'generic',
+        'client_id': client_id,
+        'client_secret': secret_ref,
+        'base_url': base_url
+    }
+    
+    if oidc_issuer:
+        auth_config['oidc_issuer'] = oidc_issuer
+    else:
+        # Manual endpoint configuration
+        auth_url = input("Authorization URL: ").strip()
+        token_url = input("Token URL: ").strip()
+        jwks_url = input("JWKS URL: ").strip()
+        issuer = input("Issuer: ").strip()
+        audience = input("Audience (optional): ").strip()
+        
+        auth_config['authorization_url'] = auth_url
+        auth_config['token_url'] = token_url
+        auth_config['jwks_url'] = jwks_url
+        auth_config['issuer'] = issuer
+        if audience:
+            auth_config['audience'] = audience
+    
+    print(f"\nCallback URL to register with your provider:")
+    print(f"  {base_url}/auth/callback")
+    print("\n✅ Generic OAuth configured!")
+    return auth_config
+
+
+def _configure_ssl_files(current_ssl: dict) -> dict:
+    """Configure SSL with existing certificate files."""
+    cert_file = input("Certificate file path: ").strip()
+    key_file = input("Private key file path: ").strip()
+    
+    if not cert_file or not key_file:
+        print("Both certificate and key files are required.")
+        return {'enabled': False}
+    
+    if not os.path.exists(cert_file):
+        print(f"⚠️  Warning: Certificate file not found: {cert_file}")
+    if not os.path.exists(key_file):
+        print(f"⚠️  Warning: Key file not found: {key_file}")
+    
+    return {
+        'enabled': True,
+        'cert_file': cert_file,
+        'key_file': key_file
+    }
+
+
+def _generate_ssl_cert() -> dict:
+    """Generate self-signed SSL certificate."""
+    import datetime
+    import ipaddress
+    
+    try:
+        from cryptography import x509
+        from cryptography.x509.oid import NameOID
+        from cryptography.hazmat.primitives import hashes, serialization
+        from cryptography.hazmat.primitives.asymmetric import rsa
+    except ImportError:
+        print("❌ Error: cryptography library is required for certificate generation.")
+        return {'enabled': False}
+    
+    output_dir = os.path.expanduser('~/.vast-admin-mcp/ssl')
+    cn = input("Common Name (CN) [vast-admin-mcp.local]: ").strip() or "vast-admin-mcp.local"
+    days_str = input("Valid for days [365]: ").strip()
+    days = int(days_str) if days_str else 365
+    
+    print(f"\nGenerating self-signed certificate...")
+    
+    # Create output directory
+    os.makedirs(output_dir, exist_ok=True)
+    
+    # Generate private key
+    key = rsa.generate_private_key(public_exponent=65537, key_size=4096)
+    
+    # Build Subject Alternative Names
+    san_entries = [
+        x509.DNSName(cn),
+        x509.DNSName("localhost"),
+        x509.IPAddress(ipaddress.IPv4Address("127.0.0.1")),
+    ]
+    
+    # Generate certificate
+    subject = issuer = x509.Name([
+        x509.NameAttribute(NameOID.COMMON_NAME, cn),
+        x509.NameAttribute(NameOID.ORGANIZATION_NAME, "VAST Admin MCP"),
+    ])
+    
+    cert = (
+        x509.CertificateBuilder()
+        .subject_name(subject)
+        .issuer_name(issuer)
+        .public_key(key.public_key())
+        .serial_number(x509.random_serial_number())
+        .not_valid_before(datetime.datetime.utcnow())
+        .not_valid_after(datetime.datetime.utcnow() + datetime.timedelta(days=days))
+        .add_extension(x509.SubjectAlternativeName(san_entries), critical=False)
+        .add_extension(x509.BasicConstraints(ca=False, path_length=None), critical=True)
+        .sign(key, hashes.SHA256())
+    )
+    
+    # Write files
+    cert_path = os.path.join(output_dir, "cert.pem")
+    key_path = os.path.join(output_dir, "key.pem")
+    
+    with open(cert_path, "wb") as f:
+        f.write(cert.public_bytes(serialization.Encoding.PEM))
+    with open(key_path, "wb") as f:
+        f.write(key.private_bytes(
+            serialization.Encoding.PEM,
+            serialization.PrivateFormat.TraditionalOpenSSL,
+            serialization.NoEncryption()
+        ))
+    os.chmod(key_path, 0o600)
+    
+    print(f"  Cert: {cert_path}")
+    print(f"  Key:  {key_path}")
+    
+    return {
+        'enabled': True,
+        'cert_file': cert_path,
+        'key_file': key_path
+    }
+
+
+def _manage_auth_token(config: dict) -> dict:
+    """Manage authentication token submenu."""
+    while True:
+        http_config = config.get('http_server', {})
+        auth_config = http_config.get('auth', {})
+        
+        # Try to get current token
+        token = None
+        token_ref = auth_config.get('token', '')
+        
+        if token_ref.startswith('env:'):
+            token_status = "from environment variable"
+        elif token_ref:
+            try:
+                token = retrieve_password_secure("http_server", "auth_token", token_ref)
+                token_status = f"{token[:12]}...{token[-4:]}" if len(token) > 20 else token
+            except Exception:
+                token_status = "configured (encrypted)"
+        else:
+            token_status = "not configured"
+        
+        print("\n" + "-" * 40)
+        print("Authentication Token Management")
+        print("-" * 40)
+        print(f"Current token: {token_status}")
+        print("\nOptions:")
+        print("  1. Show current token")
+        print("  2. Generate new token (rotate)")
+        print("  3. Enter token manually")
+        print("  4. Export as environment variable")
+        print("  5. Remove token (disable auth)")
+        print("  0. Back to main menu")
+        
+        choice = input("\nSelect [0]: ").strip() or "0"
+        
+        if choice == "0":
+            return config
+        elif choice == "1":
+            if token_ref.startswith('env:'):
+                env_var = token_ref[4:]
+                env_token = os.environ.get(env_var, '')
+                if env_token:
+                    print(f"\nToken from {env_var}: {env_token}")
+                else:
+                    print(f"\nEnvironment variable {env_var} is not set")
+            elif token:
+                print(f"\nCurrent token: {token}")
+            else:
+                print("\nNo token configured")
+        elif choice == "2":
+            new_token = generate_auth_token()
+            secure_ref = store_password_secure("http_server", "auth_token", new_token)
+            if 'http_server' not in config:
+                config['http_server'] = {}
+            if 'auth' not in config['http_server']:
+                config['http_server']['auth'] = {'type': 'bearer'}
+            config['http_server']['auth']['token'] = secure_ref
+            print(f"\nGenerated token: {new_token}")
+            print("Token saved (encrypted)")
+        elif choice == "3":
+            from getpass import getpass
+            manual_token = getpass("Enter token: ").strip()
+            if manual_token:
+                secure_ref = store_password_secure("http_server", "auth_token", manual_token)
+                if 'http_server' not in config:
+                    config['http_server'] = {}
+                if 'auth' not in config['http_server']:
+                    config['http_server']['auth'] = {'type': 'bearer'}
+                config['http_server']['auth']['token'] = secure_ref
+                print("Token saved (encrypted)")
+        elif choice == "4":
+            if token:
+                print(f'\nexport VAST_ADMIN_MCP_AUTH_TOKEN="{token}"')
+            elif token_ref.startswith('env:'):
+                env_var = token_ref[4:]
+                env_token = os.environ.get(env_var, '')
+                if env_token:
+                    print(f'\nexport VAST_ADMIN_MCP_AUTH_TOKEN="{env_token}"')
+                else:
+                    print(f"\nEnvironment variable {env_var} is not set")
+            else:
+                print("\nNo token configured")
+        elif choice == "5":
+            if 'http_server' in config and 'auth' in config['http_server']:
+                if 'token' in config['http_server']['auth']:
+                    del config['http_server']['auth']['token']
+                    print("Token removed")
+    
+    return config
 

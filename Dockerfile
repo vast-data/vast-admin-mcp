@@ -5,7 +5,7 @@ ARG SOURCE_IMAGE_PREFIX=""
 FROM ${SOURCE_IMAGE_PREFIX}python:3.13-slim
 
 # Build arguments for versioning
-ARG VERSION=0.2.0
+ARG VERSION=0.2.1
 ARG BUILD_DATE
 ARG VCS_REF
 
@@ -34,16 +34,21 @@ COPY mcp_list_cmds_template.yaml ./
 # Upgrade pip to fix CVE-2026-1703 (information disclosure via path traversal)
 RUN pip install --no-cache-dir --upgrade pip>=26.0
 
-# Install the package
-RUN --mount=type=bind,source=dist,target=/tmp/dist \
-    pip install --no-cache-dir /tmp/dist/*.whl
+# Copy and install the package with HTTP and K8s support
+# Using COPY instead of --mount for Podman/Docker compatibility
+# [http] - for HTTP transport (uvicorn, starlette)
+# [k8s] - for reading secrets from Kubernetes API
+COPY dist/*.whl /tmp/
+RUN pip install --no-cache-dir "/tmp/vast_admin_mcp-${VERSION}-py3-none-any.whl[http,k8s]" \
+    && rm -f /tmp/*.whl
 
-# Create directory for user config (will be mounted from host)
-# This directory contains:
+# Create directories for user config and SSL certificates
+# Config directory contains:
 # - config.json (cluster configurations)
 # - mcp_list_template_modifications.yaml (user template customizations)
 # - vast_admin_mcp.log (log file)
-RUN mkdir -p /root/.vast-admin-mcp
+# - ssl/ (SSL certificates)
+RUN mkdir -p /root/.vast-admin-mcp/ssl
 
 # Set environment variables
 # Disable keyring in Docker to force encrypted file storage
@@ -52,10 +57,19 @@ ENV DOCKER_CONTAINER=true \
     VAST_ADMIN_MCP_VERSION=${VERSION} \
     FORCE_ENCRYPTED_STORAGE=true
 
+# Expose HTTP port for network MCP access
+EXPOSE 8000
+
+# Health check for HTTP mode
+HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
+    CMD curl -f http://localhost:8000/health || exit 1
+
 # Note: The default template file (mcp_list_cmds_template.yaml) is copied into the image
 # during build. To override it, mount a custom template file at runtime:
 # -v /host/path/template.yaml:/app/mcp_list_cmds_template.yaml:ro
 
 # Default command (can be overridden)
+# For stdio mode: vast-admin-mcp mcp
+# For HTTP mode: vast-admin-mcp mcp --transport http --host 0.0.0.0
 CMD ["vast-admin-mcp"]
 
