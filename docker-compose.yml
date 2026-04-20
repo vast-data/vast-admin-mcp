@@ -1,13 +1,18 @@
 # Docker Compose configuration for VAST Admin MCP
 # 
-# Usage:
+# Usage (stdio mode - for interactive/desktop use):
 #   docker-compose up -d          # Start container in background
 #   docker-compose exec app <cmd>   # Execute command in running container
 #   docker-compose down             # Stop and remove container
 #
+# Usage (HTTP mode - for network access):
+#   MCP_TRANSPORT=http docker-compose up -d
+#   # Server available at http://localhost:8000/mcp/
+#
 # To run CLI commands:
 #   docker-compose exec app vast-admin-mcp list clusters
 #   docker-compose exec app vast-admin-mcp setup
+#   docker-compose exec app vast-admin-mcp gencert  # Generate SSL certificates
 
 version: '3.8'
 
@@ -17,13 +22,16 @@ services:
       context: .
       dockerfile: Dockerfile
       args:
-        VERSION: ${VERSION:-0.2.0}
+        VERSION: ${VERSION:-0.2.1}
         BUILD_DATE: ${BUILD_DATE}
         VCS_REF: ${VCS_REF}
     image: vast-admin-mcp:${VERSION:-latest}
     container_name: vast-admin-mcp
+    # Expose HTTP port for network MCP access
+    ports:
+      - "${MCP_PORT:-8000}:8000"
     volumes:
-      # Mount config directory from host (contains config.json, template modifications, logs)
+      # Mount config directory from host (contains config.json, template modifications, logs, ssl certs)
       - ~/.vast-admin-mcp:/root/.vast-admin-mcp
       # Optionally mount default template file if you want to override it
       # Uncomment and adjust path if needed:
@@ -35,15 +43,46 @@ services:
       # - ~/.config/Claude:/root/.config/Claude  # Linux
       # - ~/.codeium/windsurf:/root/.codeium/windsurf
       # - ~/.vscode:/root/.vscode
+      # Optionally mount SSL certificates (if not using ~/.vast-admin-mcp/ssl/)
+      # - ./certs:/certs:ro
     environment:
       - DOCKER_CONTAINER=true
       - DOCKER_CONTAINER_NAME=vast-admin-mcp
       - DOCKER_IMAGE=vast-admin-mcp:${VERSION:-latest}
       - HOST_CONFIG_DIR=${HOME}/.vast-admin-mcp
-      - VAST_ADMIN_MCP_VERSION=${VERSION:-0.2.0}
+      - VAST_ADMIN_MCP_VERSION=${VERSION:-0.2.1}
       - FORCE_ENCRYPTED_STORAGE=true
-    # Keep container running (useful for docker exec)
-    command: tail -f /dev/null
+      # HTTP transport configuration
+      - MCP_TRANSPORT=${MCP_TRANSPORT:-stdio}
+      - MCP_HOST=0.0.0.0
+      - MCP_PORT=8000
+      # Authentication token (optional, for HTTP mode)
+      - VAST_ADMIN_MCP_AUTH_TOKEN=${VAST_ADMIN_MCP_AUTH_TOKEN:-}
+      # SSL certificate paths (optional, for HTTPS)
+      - MCP_SSL_CERT=${MCP_SSL_CERT:-}
+      - MCP_SSL_KEY=${MCP_SSL_KEY:-}
+    # Command depends on MCP_TRANSPORT environment variable
+    # For stdio mode (default): keeps container running for docker exec
+    # For HTTP mode: starts MCP server with network access
+    command: >
+      sh -c '
+        if [ "$MCP_TRANSPORT" = "http" ]; then
+          SSL_ARGS=""
+          if [ -n "$MCP_SSL_CERT" ] && [ -n "$MCP_SSL_KEY" ]; then
+            SSL_ARGS="--ssl-cert $MCP_SSL_CERT --ssl-key $MCP_SSL_KEY"
+          fi
+          exec vast-admin-mcp mcp --transport $MCP_TRANSPORT --host $MCP_HOST --port $MCP_PORT $SSL_ARGS
+        else
+          exec tail -f /dev/null
+        fi
+      '
     stdin_open: true
     tty: true
+    # Health check for HTTP mode
+    healthcheck:
+      test: ["CMD-SHELL", "if [ \"$MCP_TRANSPORT\" = \"http\" ]; then curl -f http://localhost:8000/health || exit 1; else exit 0; fi"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
 

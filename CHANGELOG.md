@@ -2,6 +2,19 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.2.1] - 2026-04-20
+
+### Added
+
+- **MCP over HTTP/HTTPS** -- Run VAST Admin MCP as a standalone HTTP server for remote access from MCP clients (Cursor, Claude Desktop, etc.).
+- **Kubernetes/OpenShift Deployment** -- Production-ready manifests for K8s and OpenShift with HTTP and HTTPS options, health probes, RBAC for secrets, and multiple access methods (NodePort, Ingress, OpenShift Route).
+  - New `create-tls-secret.sh` helper for generating TLS certificates.
+  - Comprehensive deployment guide in `deploy/kubernetes/README.md`.
+
+### Fixed
+
+- **API Pagination Bug** -- Fixed pagination logic bug
+
 ## [0.2.0] - 2026-03-09
 
 ### Added

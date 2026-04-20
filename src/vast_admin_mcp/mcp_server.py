@@ -10,6 +10,13 @@ from fastmcp import FastMCP
 from mcp.types import TextContent
 from fastmcp.tools.tool import ToolResult
 
+# Try to import starlette for health check endpoint
+try:
+    from starlette.responses import JSONResponse
+    STARLETTE_AVAILABLE = True
+except ImportError:
+    STARLETTE_AVAILABLE = False
+
 
 def _make_result(data: Any) -> ToolResult:
     """Wrap tool output in a ToolResult with text-only content (no structuredContent).
@@ -47,11 +54,186 @@ if True:  # Always import, but only register when read_write=True
         create_support_bundle = None
 
 
-def start_mcp(read_write: bool = False):
+def create_auth_provider(auth_config: Optional[Dict[str, Any]] = None):
+    """Create authentication provider based on config.
     
+    Args:
+        auth_config: Authentication configuration dict with 'type' and provider-specific settings
+        
+    Returns:
+        Authentication provider instance or None
+    """
+    if not auth_config:
+        return None
+    
+    auth_type = auth_config.get("type")
+    
+    if not auth_type or auth_type == "none":
+        return None
+    
+    if auth_type == "bearer":
+        # Bearer token auth is handled via middleware, not FastMCP's auth system
+        # Return None here - middleware will be set up in create_mcp_server()
+        logging.info("Bearer token auth configured (will use middleware)")
+        return None
+    
+    if auth_type == "oauth":
+        provider = auth_config.get("provider")
+        client_id = auth_config.get("client_id")
+        client_secret = auth_config.get("client_secret")
+        base_url = auth_config.get("base_url")
+        
+        if provider == "github":
+            try:
+                from fastmcp.server.auth.providers.github import GitHubProvider
+                logging.info("HTTP authentication enabled (GitHub OAuth)")
+                return GitHubProvider(
+                    client_id=client_id,
+                    client_secret=client_secret,
+                    base_url=base_url
+                )
+            except ImportError:
+                logging.warning("GitHubProvider not available")
+        elif provider == "google":
+            try:
+                from fastmcp.server.auth.providers.google import GoogleProvider
+                logging.info("HTTP authentication enabled (Google OAuth)")
+                return GoogleProvider(
+                    client_id=client_id,
+                    client_secret=client_secret,
+                    base_url=base_url
+                )
+            except ImportError:
+                logging.warning("GoogleProvider not available")
+        elif provider == "generic":
+            oidc_issuer = auth_config.get("oidc_issuer")
+            
+            if oidc_issuer:
+                try:
+                    from fastmcp.server.auth import OIDCProxy
+                    logging.info(f"HTTP authentication enabled (OIDC: {oidc_issuer})")
+                    return OIDCProxy(
+                        issuer_url=oidc_issuer,
+                        client_id=client_id,
+                        client_secret=client_secret,
+                        base_url=base_url
+                    )
+                except ImportError:
+                    logging.warning("OIDCProxy not available")
+            else:
+                try:
+                    from fastmcp.server.auth import OAuthProxy
+                    from fastmcp.server.auth.providers.jwt import JWTVerifier
+                    
+                    token_verifier = JWTVerifier(
+                        jwks_uri=auth_config.get("jwks_url"),
+                        issuer=auth_config.get("issuer"),
+                        audience=auth_config.get("audience")
+                    )
+                    
+                    logging.info("HTTP authentication enabled (Generic OAuth)")
+                    return OAuthProxy(
+                        upstream_authorization_endpoint=auth_config.get("authorization_url"),
+                        upstream_token_endpoint=auth_config.get("token_url"),
+                        upstream_client_id=client_id,
+                        upstream_client_secret=client_secret,
+                        token_verifier=token_verifier,
+                        base_url=base_url
+                    )
+                except ImportError:
+                    logging.warning("OAuthProxy not available")
+    
+    return None
+
+
+def start_mcp(
+    read_write: bool = False,
+    transport: str = "stdio",
+    host: str = "127.0.0.1",
+    port: int = 8000,
+    path: str = "/mcp/",
+    auth_config: Optional[Dict[str, Any]] = None,
+    ssl_certfile: Optional[str] = None,
+    ssl_keyfile: Optional[str] = None
+):
+    """Start the MCP server with configurable transport and authentication.
+    
+    Args:
+        read_write: Enable read-write mode (create operations)
+        transport: Transport protocol - 'stdio' or 'http'
+        host: Bind address for HTTP transport (default: 127.0.0.1)
+        port: Port for HTTP transport (default: 8000)
+        path: URL path for HTTP transport (default: /mcp/)
+        auth_config: Authentication configuration dict
+        ssl_certfile: Path to SSL certificate file for HTTPS
+        ssl_keyfile: Path to SSL private key file for HTTPS
+    """
     mode_str = "read-write" if read_write else "readonly"
-    logging.info(f"Starting MCP server in {mode_str} mode...")
-    mcp = FastMCP("VAST Admin MCP Server")
+    transport_str = f"{transport}" if transport == "stdio" else f"{transport} on {host}:{port}"
+    logging.info(f"Starting MCP server in {mode_str} mode via {transport_str}...")
+    
+    # Set up authentication for HTTP transport
+    auth = None
+    bearer_token = None
+    http_middleware = []
+    
+    if transport != "stdio" and auth_config:
+        auth_type = auth_config.get("type")
+        if auth_type == "bearer":
+            # Use middleware for bearer token auth (doesn't set up OAuth endpoints)
+            bearer_token = auth_config.get("token")
+            if bearer_token:
+                logging.info("HTTP authentication enabled (bearer token via middleware)")
+        else:
+            # Use FastMCP's auth system for OAuth-based auth
+            auth = create_auth_provider(auth_config)
+    
+    # Create bearer token middleware if configured
+    if bearer_token and STARLETTE_AVAILABLE:
+        from starlette.middleware import Middleware
+        from starlette.middleware.base import BaseHTTPMiddleware
+        from starlette.responses import Response
+        
+        class BearerTokenMiddleware(BaseHTTPMiddleware):
+            """Middleware to validate Bearer token in Authorization header."""
+            
+            def __init__(self, app, token: str):
+                super().__init__(app)
+                self.token = token
+            
+            async def dispatch(self, request, call_next):
+                # Skip auth for health check endpoint
+                if request.url.path == "/health":
+                    return await call_next(request)
+                
+                # Check Authorization header
+                auth_header = request.headers.get("Authorization", "")
+                if auth_header.startswith("Bearer "):
+                    provided_token = auth_header[7:]  # Remove "Bearer " prefix
+                    if provided_token == self.token:
+                        return await call_next(request)
+                
+                # Return 401 Unauthorized
+                return Response(
+                    content='{"error": "Unauthorized", "message": "Invalid or missing bearer token"}',
+                    status_code=401,
+                    media_type="application/json"
+                )
+        
+        http_middleware = [Middleware(BearerTokenMiddleware, token=bearer_token)]
+    
+    mcp = FastMCP("VAST Admin MCP Server", auth=auth)
+    
+    # Add health check endpoint for HTTP transport
+    if transport != "stdio" and STARLETTE_AVAILABLE:
+        @mcp.custom_route("/health", methods=["GET"])
+        async def health_check(request):
+            return JSONResponse({
+                "status": "healthy",
+                "service": "vast-admin-mcp",
+                "mode": mode_str,
+                "transport": transport
+            })
 
     @mcp.tool(name="list_clusters_vast", description="Retrieve information about VAST clusters, their status, capacity and usage. IMPORTANT: Call this tool FIRST when you need to query 'all clusters' or discover available cluster names before using other tools like list_views_vast.")
     async def list_clusters_mcp(
@@ -1542,7 +1724,34 @@ def start_mcp(read_write: bool = False):
 
         logging.info("Registered create tools (available in read-write mode only)")
 
-    mcp.run(transport="stdio")
+    # Run the server with appropriate transport
+    if transport == "stdio":
+        mcp.run(transport="stdio")
+    else:
+        run_kwargs = {
+            "transport": transport,
+            "host": host,
+            "port": port,
+            "path": path
+        }
+        
+        # Add middleware for bearer token auth
+        if http_middleware:
+            run_kwargs["middleware"] = http_middleware
+        
+        # Add SSL configuration via uvicorn_config if provided
+        if ssl_certfile and ssl_keyfile:
+            if os.path.exists(ssl_certfile) and os.path.exists(ssl_keyfile):
+                run_kwargs["uvicorn_config"] = {
+                    "ssl_certfile": ssl_certfile,
+                    "ssl_keyfile": ssl_keyfile
+                }
+                logging.info(f"SSL enabled with cert: {ssl_certfile}")
+            else:
+                logging.warning(f"SSL certificate or key file not found, running without SSL")
+        
+        logging.info(f"MCP server listening on {host}:{port}{path}")
+        mcp.run(**run_kwargs)
     
     logging.info("MCP server started successfully.")
 

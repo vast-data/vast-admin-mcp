@@ -1,0 +1,287 @@
+# Kubernetes deployment manifests for VAST Admin MCP Server
+#
+# This deployment provides a complete MCP server for VAST Data cluster administration
+# with support for HTTP/HTTPS, bearer token authentication, and K8s Secrets integration.
+#
+# Quick Start (HTTP):
+#   1. Create namespace:        kubectl create namespace vast-admin-mcp
+#   2. Edit this file with your cluster credentials and configuration
+#   3. Deploy:                  kubectl apply -f vast-admin-mcp.yaml -n vast-admin-mcp
+#
+# Quick Start (HTTPS):
+#   1. Create namespace:        kubectl create namespace vast-admin-mcp
+#   2. Edit this file with your cluster credentials and configuration
+#   3. Create TLS certificate:  ./create-tls-secret.sh -n vast-admin-mcp
+#   4. Enable HTTPS:            Search for "HTTPS:" comments and follow instructions
+#   5. Deploy:                  kubectl apply -f vast-admin-mcp.yaml -n vast-admin-mcp
+#
+# For detailed instructions, see README.md in this directory.
+
+---
+# Secret - Store sensitive credentials
+# Update these values with your actual credentials
+apiVersion: v1
+kind: Secret
+metadata:
+  name: vast-admin-mcp-secrets
+  labels:
+    app: vast-admin-mcp
+type: Opaque
+stringData:
+  # Cluster passwords - add one entry per VAST cluster
+  # Format: <cluster-name>-password: "<password>"
+  vms1-password: "your-cluster-password-here"
+  # vms2-password: "another-cluster-password"
+  
+  # HTTP authentication token for MCP API access
+  # Generate a secure token: openssl rand -base64 32 | tr -d '=' | sed 's/^/vamt_/'
+  auth-token: "vamt_your-secure-token-here"
+
+---
+# ConfigMap - Application configuration
+# Update with your VAST cluster settings
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: vast-admin-mcp-config
+  labels:
+    app: vast-admin-mcp
+data:
+  config.json: |
+    {
+      "clusters": [
+        {
+          "cluster": "vms1.example.com",
+          "username": "admin",
+          "password": "k8s:vast-admin-mcp/vast-admin-mcp-secrets/vms1-password",
+          "tenant": "default",
+          "user_type": "SUPER_ADMIN"
+        }
+      ],
+      "http_server": {
+        "enabled": true,
+        "host": "0.0.0.0",
+        "port": 8000,
+        "auth": {
+          "type": "bearer",
+          "token": "k8s:vast-admin-mcp/vast-admin-mcp-secrets/auth-token"
+        }
+      }
+    }
+
+---
+# ServiceAccount for the pod
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: vast-admin-mcp
+  labels:
+    app: vast-admin-mcp
+
+---
+# Role - Permission to read secrets for credential resolution
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: vast-admin-mcp-secret-reader
+  labels:
+    app: vast-admin-mcp
+rules:
+- apiGroups: [""]
+  resources: ["secrets"]
+  resourceNames: ["vast-admin-mcp-secrets"]
+  verbs: ["get"]
+
+---
+# RoleBinding - Bind role to service account
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: vast-admin-mcp-secret-reader
+  labels:
+    app: vast-admin-mcp
+subjects:
+- kind: ServiceAccount
+  name: vast-admin-mcp
+roleRef:
+  kind: Role
+  name: vast-admin-mcp-secret-reader
+  apiGroup: rbac.authorization.k8s.io
+
+---
+# Deployment
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: vast-admin-mcp
+  labels:
+    app: vast-admin-mcp
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: vast-admin-mcp
+  template:
+    metadata:
+      labels:
+        app: vast-admin-mcp
+    spec:
+      serviceAccountName: vast-admin-mcp
+      containers:
+      - name: vast-admin-mcp
+        # Use Docker Hub image or your own registry
+        # Docker Hub: docker.io/vastdataorg/vast-admin-mcp:0.2.1
+        # Private registry: your-registry.example.com/vast-admin-mcp:0.2.1
+        image: docker.io/vastdataorg/vast-admin-mcp:0.2.1
+        imagePullPolicy: Always
+        ports:
+        - name: http
+          containerPort: 8000
+          protocol: TCP
+        # HTTP startup command (default)
+        command:
+        - sh
+        - -c
+        - |
+          cp /config-readonly/config.json /root/.vast-admin-mcp/config.json
+          exec vast-admin-mcp mcp --transport http --host 0.0.0.0 --port 8000
+        # HTTPS: Replace the command above with:
+        # command:
+        # - sh
+        # - -c
+        # - |
+        #   cp /config-readonly/config.json /root/.vast-admin-mcp/config.json
+        #   exec vast-admin-mcp mcp --transport http --host 0.0.0.0 --port 8000 --ssl-cert /tls/tls.crt --ssl-key /tls/tls.key
+        env:
+        - name: FORCE_ENCRYPTED_STORAGE
+          value: "true"
+        volumeMounts:
+        # ConfigMap mounted read-only
+        - name: config-readonly
+          mountPath: /config-readonly
+          readOnly: true
+        # Writable volume for config and logs
+        - name: config-writable
+          mountPath: /root/.vast-admin-mcp
+        # HTTPS: Uncomment to mount TLS certificates
+        # - name: tls-certs
+        #   mountPath: /tls
+        #   readOnly: true
+        resources:
+          requests:
+            memory: "128Mi"
+            cpu: "100m"
+          limits:
+            memory: "512Mi"
+            cpu: "500m"
+        livenessProbe:
+          httpGet:
+            path: /health
+            port: http
+            # HTTPS: Add scheme: HTTPS
+          initialDelaySeconds: 10
+          periodSeconds: 30
+          timeoutSeconds: 5
+          failureThreshold: 3
+        readinessProbe:
+          httpGet:
+            path: /health
+            port: http
+            # HTTPS: Add scheme: HTTPS
+          initialDelaySeconds: 5
+          periodSeconds: 10
+          timeoutSeconds: 3
+          failureThreshold: 3
+        securityContext:
+          allowPrivilegeEscalation: false
+          readOnlyRootFilesystem: false
+          runAsNonRoot: false
+      volumes:
+      # ConfigMap with config.json (read-only source)
+      - name: config-readonly
+        configMap:
+          name: vast-admin-mcp-config
+      # Writable volume for config and logs
+      - name: config-writable
+        emptyDir: {}
+      # HTTPS: Uncomment to add TLS secret volume
+      # - name: tls-certs
+      #   secret:
+      #     secretName: vast-admin-mcp-tls
+
+---
+# Service - ClusterIP (internal access)
+apiVersion: v1
+kind: Service
+metadata:
+  name: vast-admin-mcp
+  labels:
+    app: vast-admin-mcp
+spec:
+  type: ClusterIP
+  selector:
+    app: vast-admin-mcp
+  ports:
+  - name: http
+    port: 8000
+    targetPort: http
+    protocol: TCP
+
+---
+# Service - NodePort (external access without Ingress)
+# Uncomment to enable external access via: http(s)://<node-ip>:30800/mcp/
+# apiVersion: v1
+# kind: Service
+# metadata:
+#   name: vast-admin-mcp-nodeport
+#   labels:
+#     app: vast-admin-mcp
+# spec:
+#   type: NodePort
+#   selector:
+#     app: vast-admin-mcp
+#   ports:
+#   - name: http
+#     port: 8000
+#     targetPort: http
+#     nodePort: 30800
+#     protocol: TCP
+
+---
+# Ingress (optional - for external access with domain name)
+# Requires an Ingress controller (nginx, traefik, etc.)
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: vast-admin-mcp
+  labels:
+    app: vast-admin-mcp
+  annotations:
+    # Nginx Ingress Controller annotations
+    # nginx.ingress.kubernetes.io/backend-protocol: "HTTP"
+    # nginx.ingress.kubernetes.io/proxy-read-timeout: "300"
+    # nginx.ingress.kubernetes.io/proxy-send-timeout: "300"
+    # nginx.ingress.kubernetes.io/ssl-redirect: "true"
+    # HTTPS: For TLS passthrough (pod handles TLS), use:
+    # nginx.ingress.kubernetes.io/ssl-passthrough: "true"
+    # nginx.ingress.kubernetes.io/backend-protocol: "HTTPS"
+    
+    # Traefik Ingress Controller annotations
+    # traefik.ingress.kubernetes.io/router.tls: "true"
+spec:
+  # TLS configuration - uncomment to enable HTTPS at Ingress level
+  # tls:
+  # - hosts:
+  #   - mcp.example.com
+  #   secretName: vast-admin-mcp-tls
+  rules:
+  - host: mcp.example.com  # Update with your domain
+    http:
+      paths:
+      - path: /
+        pathType: Prefix
+        backend:
+          service:
+            name: vast-admin-mcp
+            port:
+              number: 8000

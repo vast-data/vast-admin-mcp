@@ -12,7 +12,7 @@
 #   ./vast-admin-mcp-docker.sh mcp --read-write
 #
 # Environment variables:
-#   DOCKER_IMAGE: Docker image name (default: vastdataorg/vast-admin-mcp:0.2.0)
+#   DOCKER_IMAGE: Docker image name (default: vastdataorg/vast-admin-mcp:0.2.1)
 #   DOCKER_CONTAINER_NAME: Use existing container name (for docker exec)
 #   DOCKER_CONFIG_DIR: Host config directory to mount (default: ~/.vast-admin-mcp)
 #   DOCKER_TEMPLATE_FILE: Host path to default template file (optional, for override)
@@ -20,7 +20,7 @@
 set -e
 
 # Default values
-DOCKER_IMAGE="${DOCKER_IMAGE:-vastdataorg/vast-admin-mcp:0.2.0}"
+DOCKER_IMAGE="${DOCKER_IMAGE:-vastdataorg/vast-admin-mcp:0.2.1}"
 DOCKER_CONTAINER_NAME="${DOCKER_CONTAINER_NAME:-}"
 DOCKER_CONFIG_DIR="${DOCKER_CONFIG_DIR:-$HOME/.vast-admin-mcp}"
 DOCKER_TEMPLATE_FILE="${DOCKER_TEMPLATE_FILE:-}"

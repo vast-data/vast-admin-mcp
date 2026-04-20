@@ -715,8 +715,9 @@ def call_vast_api(
                     all_results.extend(page_results)
                     
                     # Check if there are more pages
-                    total = result.get('total', len(page_results))
-                    if len(all_results) >= total or len(page_results) == 0:
+                    # VAST API uses 'count' for total items and 'next' URL for pagination
+                    # When 'next' is null/None, there are no more pages
+                    if result.get('next') is None or len(page_results) == 0:
                         break
                     page += 1
                 else:

@@ -1,6 +1,8 @@
 import os
 import sys
 import argparse
+import json
+import logging
 import re
 from typing import Optional, Dict, Tuple, List, Any
 
@@ -1862,6 +1864,133 @@ def handle_mcpsetup_command(args) -> None:
         sys.exit(1)
 
 
+def handle_gencert_command(args) -> None:
+    """Handle the gencert command to generate self-signed SSL certificates."""
+    import datetime
+    import ipaddress
+    
+    try:
+        from cryptography import x509
+        from cryptography.x509.oid import NameOID
+        from cryptography.hazmat.primitives import hashes, serialization
+        from cryptography.hazmat.primitives.asymmetric import rsa
+    except ImportError:
+        print("❌ Error: cryptography library is required for certificate generation.")
+        print("   Install it with: pip install cryptography")
+        sys.exit(1)
+    
+    output_dir = args.output_dir
+    cn = args.cn
+    days = args.days
+    additional_sans = args.san or []
+    
+    print(f"🔐 Generating self-signed SSL certificate...")
+    print(f"   Common Name (CN): {cn}")
+    print(f"   Valid for: {days} days")
+    print(f"   Output directory: {output_dir}")
+    print()
+    
+    # Create output directory
+    os.makedirs(output_dir, exist_ok=True)
+    
+    # Generate private key
+    print("   Generating 4096-bit RSA private key...")
+    key = rsa.generate_private_key(public_exponent=65537, key_size=4096)
+    
+    # Build Subject Alternative Names
+    san_entries = [
+        x509.DNSName(cn),
+        x509.DNSName("localhost"),
+        x509.IPAddress(ipaddress.IPv4Address("127.0.0.1")),
+    ]
+    
+    # Add additional SANs
+    for san in additional_sans:
+        try:
+            # Try to parse as IP address
+            ip = ipaddress.ip_address(san)
+            san_entries.append(x509.IPAddress(ip))
+            print(f"   Adding SAN (IP): {san}")
+        except ValueError:
+            # Treat as DNS name
+            san_entries.append(x509.DNSName(san))
+            print(f"   Adding SAN (DNS): {san}")
+    
+    # Generate certificate
+    print("   Generating certificate...")
+    subject = issuer = x509.Name([
+        x509.NameAttribute(NameOID.COMMON_NAME, cn),
+        x509.NameAttribute(NameOID.ORGANIZATION_NAME, "VAST Admin MCP"),
+    ])
+    
+    cert = (
+        x509.CertificateBuilder()
+        .subject_name(subject)
+        .issuer_name(issuer)
+        .public_key(key.public_key())
+        .serial_number(x509.random_serial_number())
+        .not_valid_before(datetime.datetime.utcnow())
+        .not_valid_after(datetime.datetime.utcnow() + datetime.timedelta(days=days))
+        .add_extension(
+            x509.SubjectAlternativeName(san_entries),
+            critical=False,
+        )
+        .add_extension(
+            x509.BasicConstraints(ca=False, path_length=None),
+            critical=True,
+        )
+        .add_extension(
+            x509.KeyUsage(
+                digital_signature=True,
+                key_encipherment=True,
+                content_commitment=False,
+                data_encipherment=False,
+                key_agreement=False,
+                key_cert_sign=False,
+                crl_sign=False,
+                encipher_only=False,
+                decipher_only=False,
+            ),
+            critical=True,
+        )
+        .add_extension(
+            x509.ExtendedKeyUsage([x509.oid.ExtendedKeyUsageOID.SERVER_AUTH]),
+            critical=False,
+        )
+        .sign(key, hashes.SHA256())
+    )
+    
+    # Write files
+    cert_path = os.path.join(output_dir, "cert.pem")
+    key_path = os.path.join(output_dir, "key.pem")
+    
+    print(f"   Writing certificate to: {cert_path}")
+    with open(cert_path, "wb") as f:
+        f.write(cert.public_bytes(serialization.Encoding.PEM))
+    
+    print(f"   Writing private key to: {key_path}")
+    with open(key_path, "wb") as f:
+        f.write(key.private_bytes(
+            serialization.Encoding.PEM,
+            serialization.PrivateFormat.TraditionalOpenSSL,
+            serialization.NoEncryption()
+        ))
+    
+    # Restrict key file permissions (owner read/write only)
+    os.chmod(key_path, 0o600)
+    
+    print()
+    print("✅ Certificate generated successfully!")
+    print()
+    print("To use with vast-admin-mcp:")
+    print(f"   vast-admin-mcp mcp --transport http --host 0.0.0.0 \\")
+    print(f"       --ssl-cert {cert_path} \\")
+    print(f"       --ssl-key {key_path}")
+    print()
+    print("⚠️  Note: This is a self-signed certificate. Clients will need to trust it")
+    print("   or use --insecure flags when connecting.")
+
+
 def main():
     """Main entry point for the CLI application."""
     # Make logging directory if it doesn't exist
@@ -1981,6 +2110,63 @@ def main():
         '--debug', '-d',
         action='store_true',
         help='Log debug messages to console'
+    )
+    mcp_parser.add_argument(
+        '--transport', '-t',
+        choices=['stdio', 'http'],
+        default='stdio',
+        help='Transport protocol (default: stdio). Use http for network access.'
+    )
+    mcp_parser.add_argument(
+        '--host',
+        default=None,
+        help='Bind address for HTTP transport (default: 127.0.0.1, or from config). Use 0.0.0.0 for all interfaces.'
+    )
+    mcp_parser.add_argument(
+        '--port', '-p',
+        type=int,
+        default=None,
+        help='Port for HTTP transport (default: 8000, or from config)'
+    )
+    mcp_parser.add_argument(
+        '--path',
+        default=None,
+        help='URL path for HTTP transport (default: /mcp/, or from config)'
+    )
+    mcp_parser.add_argument(
+        '--ssl-cert',
+        dest='ssl_cert',
+        help='Path to SSL certificate file for HTTPS'
+    )
+    mcp_parser.add_argument(
+        '--ssl-key',
+        dest='ssl_key',
+        help='Path to SSL private key file for HTTPS'
+    )
+    
+    # Generate certificate command
+    gencert_parser = subparsers.add_parser('gencert', help='Generate self-signed SSL certificate for HTTPS')
+    gencert_parser.add_argument(
+        '--days',
+        type=int,
+        default=365,
+        help='Certificate validity in days (default: 365)'
+    )
+    gencert_parser.add_argument(
+        '--cn',
+        default='vast-admin-mcp.local',
+        help='Common Name (CN) for certificate (default: vast-admin-mcp.local)'
+    )
+    gencert_parser.add_argument(
+        '--output-dir',
+        dest='output_dir',
+        default=os.path.expanduser('~/.vast-admin-mcp/ssl'),
+        help='Output directory for certificate files (default: ~/.vast-admin-mcp/ssl)'
+    )
+    gencert_parser.add_argument(
+        '--san',
+        action='append',
+        help='Additional Subject Alternative Names (can be specified multiple times)'
     )
     
     # Performance command
@@ -2795,7 +2981,7 @@ def main():
         args = main_parser.parse_args()
     
     # Handle commands that don't require config
-    no_config_commands = ['setup', 'mcp', 'list', '--help', '-h', '--version', '-v']
+    no_config_commands = ['setup', 'mcp', 'gencert', 'list', '--help', '-h', '--version', '-v']
     if args.command not in no_config_commands:
         if not os.path.isfile(CONFIG_FILE):
             print(f"Config file {CONFIG_FILE} not found. Please run 'vast-admin-mcp setup' first.", file=sys.stderr)
@@ -2808,7 +2994,95 @@ def main():
         handle_mcpsetup_command(args)
     elif args.command == 'mcp':
         logging_main(debug=args.debug)
-        start_mcp(read_write=args.read_write)
+        
+        # Load HTTP server config from config file if available
+        http_config = {}
+        if args.transport != 'stdio' and os.path.isfile(CONFIG_FILE):
+            try:
+                with open(CONFIG_FILE, 'r') as f:
+                    config = json.load(f)
+                http_config = config.get('http_server', {})
+                if http_config.get('enabled'):
+                    logging.info(f"Using HTTP server configuration from {CONFIG_FILE}")
+            except Exception as e:
+                logging.debug(f"Could not load HTTP config from config file: {e}")
+        
+        # Apply config file values, then CLI args, then defaults
+        # CLI args override config file values, which override hardcoded defaults
+        host = args.host if args.host is not None else http_config.get('host', '127.0.0.1')
+        port = args.port if args.port is not None else http_config.get('port', 8000)
+        path = args.path if args.path is not None else http_config.get('path', '/mcp/')
+        
+        # SSL config: CLI args override config file
+        ssl_cert = args.ssl_cert
+        ssl_key = args.ssl_key
+        if ssl_cert is None and ssl_key is None:
+            ssl_config = http_config.get('ssl', {})
+            if ssl_config.get('enabled'):
+                ssl_cert = ssl_config.get('cert_file')
+                ssl_key = ssl_config.get('key_file')
+        
+        # Build auth config: env var > CLI stored config > config file
+        auth_config = None
+        auth_token = os.environ.get('VAST_ADMIN_MCP_AUTH_TOKEN')
+        if args.transport != 'stdio':
+            if auth_token:
+                # Environment variable takes precedence
+                auth_config = {
+                    'type': 'bearer',
+                    'token': auth_token
+                }
+            elif http_config.get('auth'):
+                # Use auth config from config file
+                config_auth = http_config.get('auth', {})
+                auth_type = config_auth.get('type')
+                
+                if auth_type == 'bearer':
+                    # Retrieve stored token
+                    token_ref = config_auth.get('token', '')
+                    if token_ref:
+                        if token_ref.startswith('env:'):
+                            # Use environment variable reference
+                            env_var = token_ref[4:]
+                            env_token = os.environ.get(env_var)
+                            if env_token:
+                                auth_config = {'type': 'bearer', 'token': env_token}
+                            else:
+                                logging.warning(f"Environment variable {env_var} not set for bearer token")
+                        else:
+                            # Retrieve encrypted/stored token
+                            from .utils import retrieve_password_secure
+                            try:
+                                token = retrieve_password_secure("http_server", "auth_token", token_ref)
+                                auth_config = {'type': 'bearer', 'token': token}
+                            except Exception as e:
+                                logging.warning(f"Could not retrieve stored auth token: {e}")
+                elif auth_type == 'oauth':
+                    # OAuth config - resolve client_secret reference
+                    auth_config = config_auth.copy()
+                    secret_ref = auth_config.get('client_secret', '')
+                    if secret_ref and not secret_ref.startswith(('env:', 'k8s:')):
+                        from .utils import retrieve_password_secure
+                        try:
+                            secret = retrieve_password_secure("http_server", "oauth_client_secret", secret_ref)
+                            auth_config['client_secret'] = secret
+                        except Exception as e:
+                            logging.warning(f"Could not retrieve OAuth client secret: {e}")
+                elif auth_type and auth_type != 'none':
+                    auth_config = config_auth
+        
+        start_mcp(
+            read_write=args.read_write,
+            transport=args.transport,
+            host=host,
+            port=port,
+            path=path,
+            auth_config=auth_config,
+            ssl_certfile=ssl_cert,
+            ssl_keyfile=ssl_key
+        )
+    elif args.command == 'gencert':
+        handle_gencert_command(args)
     elif args.command == 'performance':
         handle_performance_command(args)
     elif args.command == 'dataflow':
