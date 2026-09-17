@@ -5,7 +5,7 @@ ARG SOURCE_IMAGE_PREFIX=""
 FROM ${SOURCE_IMAGE_PREFIX}python:3.13-slim
 
 # Build arguments for versioning
-ARG VERSION=0.2.3
+ARG VERSION=0.2.4
 ARG BUILD_DATE
 ARG VCS_REF
 
@@ -20,10 +20,18 @@ LABEL org.opencontainers.image.title="VAST Admin MCP Server" \
       org.opencontainers.image.authors="Haim Marko <haim.marko@vastdata.com>" \
       org.opencontainers.image.licenses="MIT"
 
-# Install jq (required for field transformations)
+# Install jq and upgrade Debian packages with known CVEs from Trivy
+# gzip, glibc (libc6/libc-bin), pcre2, sqlite3, perl-base
 RUN apt-get update && \
     apt-get install -y --no-install-recommends \
     jq \
+    && apt-get install -y --no-install-recommends --only-upgrade \
+    gzip \
+    libc-bin \
+    libc6 \
+    libpcre2-8-0 \
+    libsqlite3-0 \
+    perl-base \
     && rm -rf /var/lib/apt/lists/*
 
 # Set working directory
@@ -31,8 +39,14 @@ WORKDIR /app
 
 COPY mcp_list_cmds_template.yaml ./
 
-# Upgrade pip to fix CVE-2026-1703 (information disclosure via path traversal)
-RUN pip install --no-cache-dir --upgrade pip>=26.0
+# Upgrade pip to fix CVE-2026-1703 and CVE-2026-13346 (requires pip>=26.2.0).
+# pip>=26.2 ships pip/_vendor/bom.cdx.json listing vendored msgpack/setuptools
+# versions that Trivy reports as false positives (trivy#11031) — delete it.
+# Remove base-image setuptools (not needed at runtime; wheel install only).
+RUN pip install --no-cache-dir --upgrade "pip>=26.2.0" \
+    && pip uninstall -y setuptools || true \
+    && find /usr/local/lib -path '*/pip/_vendor/bom.cdx.json' -delete \
+    && find /usr/local/lib -path '*/ensurepip/_bundled/setuptools*' -delete
 
 # Copy and install the package with HTTP and K8s support
 # Using COPY instead of --mount for Podman/Docker compatibility

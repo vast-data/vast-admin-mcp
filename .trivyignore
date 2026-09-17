@@ -3,3 +3,10 @@ CVE-2025-66418
 CVE-2025-66471
 CVE-2025-50181
 CVE-2026-21441
+
+# False positives from pip>=26.2 pip/_vendor/bom.cdx.json (vendored SBOM, not
+# installed packages). See aquasecurity/trivy#11031. Image build deletes the
+# file and CI skips it; these entries cover residual reports.
+GHSA-6v7p-g79w-8964
+CVE-2025-47273
+CVE-2026-59890
