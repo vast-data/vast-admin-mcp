@@ -2,6 +2,16 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.2.4] - 2026-09-17
+
+### Added
+
+- **Hardware Topology HW Type/Model** -- `list_hardware_topology_vast` (via `cnodes` / `dnodes`) now exposes hardware identity fields from the VAST API:
+
+### Fixed
+
+- **Docker Image CVEs** -- Dockerfile upgrades Debian packages (`gzip`, `libc6`/`libc-bin`, `libpcre2-8-0`, `libsqlite3-0`, `perl-base`), upgrades `pip>=26.2.0` (CVE-2026-13346), and removes pip `bom.cdx.json` / unused setuptools to clear Trivy false positives for msgpack/setuptools. 
+
 ## [0.2.3] - 2026-06-12
 
 ### Added

@@ -661,6 +661,40 @@ list_cmds:
           operator: "=="
           value: "ebox"
 
+      # HW model/vendor from CNode (works for both cbox and ebox parents)
+      - name: box vendor
+        field: box_vendor
+        argument:
+          type: str
+          mandatory: false
+          filter: true
+          aliases:
+          - model
+          - hw_model
+          - hardware_model
+          - vendor
+
+      - name: position
+        field: position
+
+      # EBox-only HW type fields (CBox API has no hardware_type)
+      - name: hardware type
+        field: eboxes.hardware_type
+        join_on:
+          field: box_id
+          on_field: id
+        argument:
+          type: str
+          mandatory: false
+          filter: true
+          aliases:
+          - hw_type
+          - hardware_type
+        condition:
+          field: box_type
+          operator: "=="
+          value: "ebox"
+
       - name: serial number
         field: sn
         argument:
@@ -788,6 +822,83 @@ list_cmds:
 
       - name: rack unit
         field: eboxes.rack_unit
+        join_on:
+          field: box_id
+          on_field: id
+        condition:
+          field: box_type
+          operator: "=="
+          value: "ebox"
+
+      # HW type/model from parent DBox
+      - name: hardware type
+        field: dboxes.hardware_type
+        join_on:
+          field: box_id
+          on_field: id
+        argument:
+          type: str
+          mandatory: false
+          filter: true
+          aliases:
+          - hw_type
+          - hardware_type
+        condition:
+          field: box_type
+          operator: "=="
+          value: "dbox"
+
+      - name: hardware type
+        field: eboxes.hardware_type
+        join_on:
+          field: box_id
+          on_field: id
+        condition:
+          field: box_type
+          operator: "=="
+          value: "ebox"
+
+      - name: box vendor
+        field: dboxes.box_vendor
+        join_on:
+          field: box_id
+          on_field: id
+        argument:
+          type: str
+          mandatory: false
+          filter: true
+          aliases:
+          - model
+          - hw_model
+          - hardware_model
+          - vendor
+        condition:
+          field: box_type
+          operator: "=="
+          value: "dbox"
+
+      - name: box vendor
+        field: eboxes.box_vendor
+        join_on:
+          field: box_id
+          on_field: id
+        condition:
+          field: box_type
+          operator: "=="
+          value: "ebox"
+
+      - name: drive type
+        field: dboxes.drive_type
+        join_on:
+          field: box_id
+          on_field: id
+        condition:
+          field: box_type
+          operator: "=="
+          value: "dbox"
+
+      - name: drive type
+        field: eboxes.drive_type
         join_on:
           field: box_id
           on_field: id
@@ -1449,11 +1560,11 @@ merged_list_cmds:
     - cnodes
     - dnodes
     description: |-
-      Use this tool to retrieve a list of dnodes and dboxes from VAST cluster(s).
+      Use this tool to retrieve hardware topology for cnodes and dnodes from VAST cluster(s), including box model/vendor, hardware type, drive type, and chassis UID.
       Args:
         {{$arguments}}
       Returns:
-        A list hardware topology of dnodes and dboxes. Each item in the list will be a dictionary containing general information regarding a specific dnode or cnode.
+        A list of hardware topology entries for cnodes and dnodes. Each item is a dictionary with node identity, parent box, rack placement, and hardware type/model details.
       Fields:
         {{$fields}}
 

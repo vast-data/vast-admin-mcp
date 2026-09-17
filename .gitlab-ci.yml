@@ -64,7 +64,11 @@ scan_image [trivy]:
     - docker pull ${IMAGE_FULL_NAME}
     - |
       set -o pipefail
-      trivy image ${IMAGE_FULL_NAME} --exit-code 1 --ignore-unfixed | tee scan_results/image-trivy
+      # Skip pip's vendored CycloneDX SBOM (pip>=26.2 bom.cdx.json) — Trivy treats
+      # its listed msgpack/setuptools versions as installed packages (trivy#11031).
+      trivy image ${IMAGE_FULL_NAME} --exit-code 1 --ignore-unfixed \
+        --ignorefile .trivyignore \
+        --skip-files "**/pip/_vendor/bom.cdx.json" | tee scan_results/image-trivy
   artifacts:
     paths:
       - scan_results/image-trivy
