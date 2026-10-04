@@ -33,7 +33,7 @@ classifiers = [
 ]
 dependencies = [
   "vastpy>=0.3.20",
-  "fastmcp>=3.2",
+  "fastmcp>=3.2,<5",
   "keyring>=25.0.0",
   "urllib3>=1.6.0",
   "keyrings.alt>=5.0.0",
