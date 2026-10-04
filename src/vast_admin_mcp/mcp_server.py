@@ -9,7 +9,7 @@ from urllib.parse import quote
 
 from fastmcp import FastMCP
 from mcp.types import TextContent
-from fastmcp.tools.tool import ToolResult
+from fastmcp.tools import ToolResult
 
 # Try to import starlette for health check endpoint
 try:

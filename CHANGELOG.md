@@ -2,6 +2,12 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.2.5] - 2026-10-04
+
+### Fixed
+
+- **FastMCP 4 Compatibility** -- Import `ToolResult` from the public `fastmcp.tools` path and constrain the dependency to `fastmcp>=3.2,<5`, so installs work with both FastMCP 3.x and 4.x.
+
 ## [0.2.4] - 2026-09-17
 
 ### Added
