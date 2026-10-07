@@ -693,8 +693,64 @@ def _format_performance_table(
     return printable_performance_table
 
 
+def _cluster_gui_capacity(cluster_row: Dict) -> Dict[str, str]:
+    """Build VAST GUI-aligned capacity fields from a clusters API row.
+
+    Mirrors the dashboard Usable/Logical breakdown:
+      Used, Pending Deletion, Free (+ totals and DRR).
+
+    Formulas (same as VAST UI):
+      Usable Used + Pending ≈ physical_space_in_use_wo_overhead
+      Logical Used + Pending ≈ estore_capacity_in_use_bytes
+      Pending Usable = data_delete_pending_bytes
+      Pending Logical ≈ Pending Usable * drr
+      Free Usable/Logical = free_usable_capacity / free_logical_space
+    """
+    pending_usable = float(cluster_row.get('data_delete_pending_bytes') or 0)
+    phys_in_use = float(
+        cluster_row.get('physical_space_in_use_wo_overhead')
+        or cluster_row.get('physical_space_in_use')
+        or 0
+    )
+    estore_in_use = float(cluster_row.get('estore_capacity_in_use_bytes') or 0)
+    drr = float(cluster_row.get('drr') or 1.0)
+    if drr <= 0:
+        drr = 1.0
+
+    used_usable = max(0.0, phys_in_use - pending_usable)
+    pending_logical = pending_usable * drr
+    if estore_in_use > 0:
+        used_logical = max(0.0, estore_in_use - pending_logical)
+    else:
+        # Fallback when estore field is unavailable
+        logical_in_use = float(cluster_row.get('logical_space_in_use') or 0)
+        used_logical = max(0.0, logical_in_use - pending_logical) if logical_in_use else used_usable * drr
+
+    free_usable = float(
+        cluster_row.get('free_usable_capacity')
+        or cluster_row.get('free_physical_space')
+        or 0
+    )
+    free_logical = float(cluster_row.get('free_logical_space') or 0)
+    usable_total = float(cluster_row.get('usable_capacity_bytes') or 0)
+    logical_total = float(cluster_row.get('logical_space') or 0)
+    drr_text = cluster_row.get('drr_text') or f"{drr:.1f}:1"
+
+    return {
+        'Usable Used': pretty_size(used_usable),
+        'Logical Used': pretty_size(used_logical),
+        'Usable Pending Deletion': pretty_size(pending_usable),
+        'Logical Pending Deletion': pretty_size(pending_logical),
+        'Usable Free': pretty_size(free_usable),
+        'Logical Free': pretty_size(free_logical),
+        'Usable Capacity': pretty_size(usable_total) if usable_total else 'N/A',
+        'Logical Capacity': pretty_size(logical_total) if logical_total else 'N/A',
+        'DRR': drr_text,
+    }
+
+
 def list_clusters(clusters: str = None):
-    """List clusters with status and general info."""
+    """List clusters with status and GUI-aligned capacity info."""
     config = load_config()
     if clusters:
         clusters = clusters.split(',')
@@ -768,12 +824,7 @@ def list_clusters(clusters: str = None):
                         'State': c['state'],
                         'Version': ".".join(c['sw_version'].split(".")[:4]) if isinstance(c['sw_version'], str) and "." in c['sw_version'] and len(c['sw_version'].split(".")) >= 4 else c['sw_version'],
                         'Uptime': c['uptime'],
-                        'Logical Used': pretty_size(c['logical_space_in_use']),
-                        'Physical Used': pretty_size(c['physical_space_in_use']),
-                        'Logical Free': pretty_size(c['free_logical_space']),
-                        'Physical Free': pretty_size(c['free_physical_space']),
-                        #'Logical Total': pretty_size(c['logical_space']),
-                        #'Physical Total': pretty_size(c['physical_space']),
+                        **_cluster_gui_capacity(c),
                         'IOPS': c['rd_iops'] + c['wr_iops'],
                         'Throughput': pretty_size(c['rd_bw'] + c['wr_bw']) + '/s'
                         }
@@ -806,12 +857,15 @@ def list_clusters(clusters: str = None):
                     'State': 'ERROR',
                     'Version': 'N/A',
                     'Uptime': 'N/A',
+                    'Usable Used': 'N/A',
                     'Logical Used': 'N/A',
-                    'Physical Used': 'N/A',
+                    'Usable Pending Deletion': 'N/A',
+                    'Logical Pending Deletion': 'N/A',
+                    'Usable Free': 'N/A',
                     'Logical Free': 'N/A',
-                    'Physical Free': 'N/A',
-                    #'Logical Total': 'N/A',
-                    #'Physical Total': 'N/A',
+                    'Usable Capacity': 'N/A',
+                    'Logical Capacity': 'N/A',
+                    'DRR': 'N/A',
                     'IOPS': 'N/A',
                     'Throughput': error_display  # Use this field to show error
                 }

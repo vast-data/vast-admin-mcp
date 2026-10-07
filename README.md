@@ -226,7 +226,7 @@ docker run --rm -it \
 
 ```bash
 # Optional: Set version (defaults to 0.1.3)
-export VERSION=0.2.4
+export VERSION=0.2.6
 
 # Start container in background
 docker-compose up -d
@@ -600,6 +600,19 @@ The following create tools are available when the MCP server is started with `--
 - **Template Modifications File**: `~/.vast-admin-mcp/mcp_list_template_modifications.yaml` (user customizations)
 - **View Templates File**: `~/.vast-admin-mcp/view_templates.json` (for view template-based creation). This file can be modified based on the template example `view_templates_example.yaml` in project root (shipped template)
 - **Log Files**: `~/.vast-admin-mcp/vast_admin_mcp.log`
+
+### Capacity Unit Base
+
+Capacity display and parsing default to SI decimal (base-1000), matching the VAST GUI (`1 TB = 10^12` bytes). To use binary (base-1024) conversion instead, set in `~/.vast-admin-mcp/config.json`:
+
+```json
+{
+  "clusters": [ ... ],
+  "capacity_unit_base": 1024
+}
+```
+
+Accepted values: `1000` / `"decimal"` / `"si"` (default), or `1024` / `"binary"` / `"iec"` / `"base2"`. With base `1024`, AUTO capacity fields use IEC labels (`TiB`, `GiB`, …). Explicit IEC size strings (`1TiB`) are always binary regardless of this setting.
 
 ### Environment Variables
 

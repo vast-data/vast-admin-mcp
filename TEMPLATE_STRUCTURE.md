@@ -292,6 +292,7 @@ Defines the output fields with their transformations and display options.
 
 - **convert**: Convert bytes to human-readable units or timestamps
   - **Capacity units**: `KB`, `MB`, `GB`, `TB`, `PB`, `AUTO`
+  - Base is configurable via `capacity_unit_base` in `config.json` (default `1000` / SI decimal, matching VAST GUI; set `1024` for binary — AUTO then uses IEC labels `KiB`…`PiB`)
   - **Time units**: `time_delta` (converts ISO timestamp to "Xd Xh Xm Xs ago" or "in Xd Xh Xm Xs")
   - `AUTO` selects the best-fit unit automatically for capacity
 

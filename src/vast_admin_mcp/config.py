@@ -208,6 +208,55 @@ def save_config(config: dict):
         raise ValueError(f"Error saving config file:{CONFIG_FILE}. Error: {e}")
 
 
+# Default capacity unit base: SI decimal (matches VAST GUI). Override via config.json
+# key "capacity_unit_base": 1000 | 1024 (also accepts "decimal"/"si" or "binary"/"iec").
+CAPACITY_UNIT_BASE_DEFAULT = 1000
+CAPACITY_UNIT_BASE_VALID = (1000, 1024)
+
+
+def get_capacity_unit_base() -> int:
+    """Return capacity conversion base from config.json (1000 or 1024).
+
+    Default is 1000 (SI decimal: 1 TB = 10^12 bytes), matching the VAST GUI.
+    Set ``"capacity_unit_base": 1024`` in ``~/.vast-admin-mcp/config.json`` for
+    binary units (1 TB treated as 2^40 bytes / TiB-style).
+
+    Accepted values:
+      - 1000 / "1000" / "decimal" / "si"
+      - 1024 / "1024" / "binary" / "iec" / "base2" / "base-2"
+
+    Returns:
+        1000 or 1024. Falls back to 1000 if config is missing or invalid.
+    """
+    try:
+        config = load_config()
+    except Exception:
+        return CAPACITY_UNIT_BASE_DEFAULT
+
+    raw = config.get('capacity_unit_base', CAPACITY_UNIT_BASE_DEFAULT)
+    if raw in CAPACITY_UNIT_BASE_VALID:
+        return int(raw)
+    if isinstance(raw, str):
+        normalized = raw.strip().lower()
+        if normalized in ('1000', 'decimal', 'si'):
+            return 1000
+        if normalized in ('1024', 'binary', 'iec', 'base2', 'base-2'):
+            return 1024
+        try:
+            as_int = int(normalized)
+            if as_int in CAPACITY_UNIT_BASE_VALID:
+                return as_int
+        except ValueError:
+            pass
+
+    logging.warning(
+        "Invalid capacity_unit_base %r in config.json; using default %s",
+        raw,
+        CAPACITY_UNIT_BASE_DEFAULT,
+    )
+    return CAPACITY_UNIT_BASE_DEFAULT
+
+
 def get_default_template_path():
     """Get the path to the default template file.
     

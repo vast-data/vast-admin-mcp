@@ -2,6 +2,16 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.2.6] - 2026-10-07
+
+### Changed
+
+- **list_clusters Capacity Fields** -- Cluster capacity columns now mirror the VAST GUI dashboard: Usable/Logical Used (excluding pending deletion), Usable/Logical Pending Deletion, Usable/Logical Free, Usable/Logical Capacity totals, and DRR. Replaces the previous Logical/Physical Used/Free fields that mixed pending deletion into "Used" and reported raw free physical instead of free usable.
+
+### Fixed
+
+- **Capacity Unit Conversion** -- Capacity displays (`convert: AUTO` / explicit KB–PB) default to SI decimal (base-1000) so labels match the VAST GUI (1 TB = 10^12 bytes). Previously values were divided by 1024^n but labeled with SI unit names, understating TB-scale capacity by ~9.95% vs the GUI. The same convention applies to capacity filters and create-quota size strings (`100TB`, `>500GB`). Override with `"capacity_unit_base": 1024` in `config.json` for binary (base-2) conversion; AUTO then uses IEC labels (`TiB`, `GiB`, …). Explicit IEC units (`1TiB`) are always binary.
+
 ## [0.2.5] - 2026-10-04
 
 ### Fixed

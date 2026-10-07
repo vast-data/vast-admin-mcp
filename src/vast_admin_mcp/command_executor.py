@@ -1709,8 +1709,12 @@ class CommandExecutor:
         
         Supports:
         - Capacity units: B, KB, MB, GB, TB, PB, AUTO
+          Base from config ``capacity_unit_base`` (default 1000 / SI decimal).
+          With base 1024, AUTO uses IEC labels (KiB…PiB).
         - Time units: time_delta (converts ISO timestamp to "Xd Xh Xm Xs ago" or "in Xd Xh Xm Xs")
         """
+        from .config import get_capacity_unit_base
+
         # Handle time_delta conversion
         if unit == 'time_delta':
             if value is None:
@@ -1723,22 +1727,24 @@ class CommandExecutor:
             bytes_value = int(value)
         except (ValueError, TypeError):
             return str(value)
-        
-        units = ['B', 'KB', 'MB', 'GB', 'TB', 'PB']
+
+        base = get_capacity_unit_base()
+        si_units = ['B', 'KB', 'MB', 'GB', 'TB', 'PB']
+        iec_units = ['B', 'KiB', 'MiB', 'GiB', 'TiB', 'PiB']
+        units = iec_units if base == 1024 else si_units
         
         if unit == 'AUTO':
-            # Find best fit
             unit_index = 0
             size = float(bytes_value)
-            while size >= 1024 and unit_index < len(units) - 1:
-                size /= 1024
+            while size >= base and unit_index < len(units) - 1:
+                size /= base
                 unit_index += 1
             return f"{size:.2f} {units[unit_index]}"
         
-        # Specific unit
+        # Specific unit — keep requested SI label; divisor follows config base
         unit_map = {'B': 0, 'KB': 1, 'MB': 2, 'GB': 3, 'TB': 4, 'PB': 5}
         if unit in unit_map:
-            divisor = 1024 ** unit_map[unit]
+            divisor = base ** unit_map[unit]
             converted = bytes_value / divisor
             return f"{converted:.2f} {unit}"
         

@@ -2,7 +2,7 @@
 
 This directory contains test scripts for the vast-admin-mcp tool.
 
-## test_list_and_create.py
+## run_list_and_create.py
 
 Comprehensive test script that validates:
 
@@ -34,7 +34,7 @@ Comprehensive test script that validates:
 
 ```bash
 # Run the test script
-python3 tests/test_list_and_create.py
+python3 tests/run_list_and_create.py
 ```
 
 ### Prerequisites

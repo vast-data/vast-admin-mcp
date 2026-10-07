@@ -1103,8 +1103,8 @@ def _generate_clusters_mcp_code() -> str:
             configured clusters. Defaults to empty string.
 
         Returns:
-            A list of dictionaries containing cluster information including Cluster, State, Version, Uptime, 
-            Logical Used, Physical Used, Logical Free, Physical Free, IOPS, and Throughput.
+            A list of dictionaries containing cluster information including Cluster, State, Version, Uptime,
+            GUI-aligned capacity (Usable/Logical Used, Pending Deletion, Free, Capacity, DRR), IOPS, and Throughput.
         """
         try:
             from vast_admin_mcp.functions import list_clusters
