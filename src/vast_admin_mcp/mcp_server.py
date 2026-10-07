@@ -327,7 +327,9 @@ def start_mcp(
             clusters (str): Comma-separated list of non-default cluster names, same credentials as the default credentials will be used. Defaults to None, will use the clusters from config.
 
         Returns:
-            A list of clusters. Each item in the list will be a dictionary containing details regarding a specific cluster. The 'name' field contains the cluster name to use in other tools.
+            A list of clusters. Each item includes status, version, GUI-aligned capacity
+            (Usable/Logical Used, Pending Deletion, Free, Capacity totals, DRR), IOPS, and Throughput.
+            The 'Cluster' field is the cluster name to use in other tools.
         """
         try:
             clusters_result = list_clusters(

@@ -473,17 +473,22 @@ def parse_time_duration(duration_str: str) -> int:
 
 # Convert size in bytes to "pretty" size (size in KB, MB, GB, or TB)
 def pretty_size(size_in_bytes: str, num_decimal_points: int = 2) -> str:
-    """Convert bytes to human-readable size string using logarithmic calculation.
+    """Convert bytes to human-readable size string.
+    
+    Base is taken from config ``capacity_unit_base`` (default 1000 / SI decimal,
+    matching VAST GUI). With base 1024, AUTO-style output uses IEC labels
+    (KiB, MiB, GiB, TiB, PiB).
     
     Args:
         size_in_bytes: Size in bytes (as string or number)
         num_decimal_points: Number of decimal points to display (default: 2)
         
     Returns:
-        Human-readable size string (e.g., "1.23 GB")
+        Human-readable size string (e.g., "1.23 GB" or "1.23 GiB")
     """
     import math
-    
+    from .config import get_capacity_unit_base
+
     try:
         size = float(size_in_bytes)
     except (ValueError, TypeError):
@@ -491,17 +496,18 @@ def pretty_size(size_in_bytes: str, num_decimal_points: int = 2) -> str:
     
     if size == 0:
         return "0 B"
-    
-    units = ['B', 'KB', 'MB', 'GB', 'TB', 'PB']
-    # Calculate unit index using logarithm (base 1000)
-    # Clamp to valid unit range
-    unit_index = min(int(math.log(size, 1000)), len(units) - 1)
-    unit_index = max(0, unit_index)  # Ensure non-negative
-    
-    # Convert to appropriate unit
-    value = size / (1000 ** unit_index)
-    
-    # Format with specified decimal points
+
+    base = get_capacity_unit_base()
+    units = (
+        ['B', 'KiB', 'MiB', 'GiB', 'TiB', 'PiB']
+        if base == 1024
+        else ['B', 'KB', 'MB', 'GB', 'TB', 'PB']
+    )
+    # Calculate unit index using logarithm; clamp to valid unit range
+    unit_index = min(int(math.log(size, base)), len(units) - 1)
+    unit_index = max(0, unit_index)
+
+    value = size / (base ** unit_index)
     return f"{value:.{num_decimal_points}f} {units[unit_index]}"
 
 def format_time_delta(timestamp_str: str) -> str:
@@ -659,6 +665,7 @@ def parse_capacity_value(capacity_str: str) -> tuple[str, int]:
     
     Supports formats like: ">1TB", ">=500GB", "<1M", "1TB", "=100GB"
     Units: B, KB, MB, GB, TB, PB (case-insensitive)
+    Multipliers follow config ``capacity_unit_base`` (default 1000).
     Operators: >, >=, <, <=, = (or no operator for equals)
     
     Args:
@@ -670,20 +677,21 @@ def parse_capacity_value(capacity_str: str) -> tuple[str, int]:
         value_in_bytes: Integer value in bytes
     """
     import re
+    from .config import get_capacity_unit_base
     
     if not capacity_str or not capacity_str.strip():
         raise ValueError("Capacity string cannot be empty")
     
     capacity_str = capacity_str.strip()
-    
-    # Unit multipliers (base 1024)
+
+    base = get_capacity_unit_base()
     units = {
         'B': 1,
-        'KB': 1024,
-        'MB': 1024 ** 2,
-        'GB': 1024 ** 3,
-        'TB': 1024 ** 4,
-        'PB': 1024 ** 5
+        'KB': base,
+        'MB': base ** 2,
+        'GB': base ** 3,
+        'TB': base ** 4,
+        'PB': base ** 5
     }
     
     # Match operator and value with unit
@@ -1031,29 +1039,37 @@ def parse_order_spec(order_spec: str, field_mappings: Optional[Dict[str, str]] =
 
 
 def get_size_in_bytes(size_str: str) -> int:
-    """Convert human-readable size string to bytes."""
+    """Convert human-readable size string to bytes.
+
+    SI labels (KB/MB/GB/TB/PB and shorthand K/M/G/T/P) use config
+    ``capacity_unit_base`` (default 1000). IEC labels (KiB…PiB) are always binary.
+    """
+    from .config import get_capacity_unit_base
+
     if not size_str:
         raise ValueError("size string cannot be empty")
     
     size_str = size_str.strip().upper()
-    
-    # Define size units:
-    # Decimal (base 1000): K, M, G, T, P
-    # Binary (base 1024): KB, MB, GB, TB, PB
-    # IEC Binary (base 1024): KiB, MiB, GiB, TiB, PiB (explicit base 2)
+    base = get_capacity_unit_base()
+
     units = {
-        # IEC binary units (longest strings first for proper matching)
-        'PIB': 1024**5, 'PB': 1024**5,
-        'TIB': 1024**4, 'TB': 1024**4,
-        'GIB': 1024**3, 'GB': 1024**3,
-        'MIB': 1024**2, 'MB': 1024**2,
-        'KIB': 1024,    'KB': 1024,
-        # Decimal units (base 1000)
-        'P': 1000**5,
-        'T': 1000**4,
-        'G': 1000**3,
-        'M': 1000**2,
-        'K': 1000,
+        # IEC binary units always use 1024 (longest strings first for matching)
+        'PIB': 1024**5,
+        'TIB': 1024**4,
+        'GIB': 1024**3,
+        'MIB': 1024**2,
+        'KIB': 1024,
+        # SI / shorthand labels follow configured capacity_unit_base
+        'PB': base**5,
+        'TB': base**4,
+        'GB': base**3,
+        'MB': base**2,
+        'KB': base,
+        'P': base**5,
+        'T': base**4,
+        'G': base**3,
+        'M': base**2,
+        'K': base,
         'B': 1
     }
     

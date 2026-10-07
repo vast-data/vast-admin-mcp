@@ -130,9 +130,9 @@ spec:
       containers:
       - name: vast-admin-mcp
         # Use Docker Hub image or your own registry
-        # Docker Hub: docker.io/vastdataorg/vast-admin-mcp:0.2.4
+        # Docker Hub: docker.io/vastdataorg/vast-admin-mcp:0.2.6
         # Private registry: your-registry.example.com/vast-admin-mcp:0.2.1
-        image: docker.io/vastdataorg/vast-admin-mcp:0.2.4
+        image: docker.io/vastdataorg/vast-admin-mcp:0.2.6
         imagePullPolicy: Always
         ports:
         - name: http

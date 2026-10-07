@@ -31,6 +31,22 @@ build:
   tags:
     - code-builder-large-shell-azure-rocky96
 
+unit_tests:
+  stage: test
+  needs: []
+  before_script:
+    # Runner default python3 is 3.9; package requires >=3.10 (fastmcp).
+    - sudo dnf install -y python3.12 python3.12-pip
+    - python3.12 -m venv .venv
+    - source .venv/bin/activate
+    - pip install -U pip
+    - pip install -e ".[socks]"
+  script:
+    - source .venv/bin/activate
+    - python -m unittest discover -s tests -p 'test_*.py' -v
+  tags:
+    - code-builder-large-shell-azure-rocky96
+
 scan_image [trufflehog]:
   stage: security
   before_script:
