@@ -370,6 +370,33 @@ Supports:
 - Built-in providers: GitHub, Google, Azure AD
 - Generic OAuth/OIDC: Okta, Keycloak, Auth0, or any OIDC-compliant provider
 
+### Per-user VAST credentials (behind a gateway)
+
+By default every caller uses the credentials stored for a cluster in `config.json`. When the server runs behind a gateway that knows its users (for example a portal that signs them in against the same Active Directory as the clusters), a cluster can instead use **each caller's own VMS session**. VAST then applies that user's own roles and records their name:
+
+```json
+{
+  "cluster": "vms1.example.com",
+  "cluster_name": "cluster1",
+  "auth_method": "per_request",
+  "user_type": "SUPER_ADMIN",
+  "tenant": ""
+}
+```
+
+- The cluster entry stores no username, password or token. `cluster_name` is required, because the server never logs in to such a cluster to look its name up.
+- Each MCP HTTP request carries the caller's VMS access token for that cluster:
+
+  ```
+  X-VAST-Bearer: cluster1=<access token>, cluster2=<access token>
+  ```
+
+  Keys are a cluster's `cluster_name` or address, case-insensitive. The gateway gets the token with `POST https://<vms>/api/token/` (username and password; AD users work too) and refreshes it with `/api/token/refresh/`.
+- The header only applies to clusters set to `per_request`. The address always comes from `config.json`, so a caller can't point the server at another host. Clusters with stored credentials ignore the header and behave exactly as before.
+- Without a token for a `per_request` cluster, a call fails with a clear error and never falls back to other credentials. If VAST refuses the token (expired or revoked), the call fails with "VAST refused your token" instead of returning an empty list.
+- Clients are cached per token, in their own cache, for up to an hour. Graphs from `per_request` clusters get an unguessable file name.
+- Only the gateway should be able to reach the server: protect it with the bearer token above and don't expose it directly.
+
 ### SSL/TLS
 
 #### Generate Self-Signed Certificate
