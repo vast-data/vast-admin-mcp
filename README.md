@@ -5,662 +5,160 @@
 [![Docker Image](https://img.shields.io/badge/docker-latest-blue)](https://github.com/vast-data/vast-admin-mcp)
 [![License](https://img.shields.io/badge/license-Apache-green)](LICENSE)
 
-VAST Admin MCP Server is a Model Context Protocol (MCP) server for VAST Data administration tasks. It provides AI assistants with tools to interact with VAST clusters for monitoring, listing, and management operations. It is supported both for Cluster and Tenant admins.
+VAST Admin MCP exposes VAST cluster admin operations to MCP-capable AI tools (Cursor, Claude Desktop, VS Code, Windsurf). It works for both cluster and tenant admins.
 
 <img src="static/vast-admin-mcp-fast.gif" alt="VAST Admin MCP Demo" width="90%">
 
-## Features
+## Table of contents
 
-- **MCP Integration**: Full MCP server implementation for AI assistant integration
-- **Network Deployment**: HTTP transport for remote access, Kubernetes, and containerized deployments
-- **Cluster Management**: List and monitor VAST clusters
-- **Performance Metrics**: Retrieve performance data for cluster objects and graphs generation
-- **Dynamic List Functions**: Automatically generate MCP functions from YAML templates for end user modifications
-- **Secure Credentials**: Secure password storage using keyring, with K8s Secrets API support
-- **Authentication**: Bearer token and OAuth/OIDC support for network deployments
-- **Read-only and Read-write Modes**: Control access level (read-write mode for create operations)
+- [What it does](#what-it-does)
+- [Requirements](#requirements)
+- [Quick start](#quick-start)
+- [Prompt examples](#prompt-examples)
+- [Installation](#installation)
+- [Configuration](#configuration)
+- [MCP tools](#mcp-tools)
+- [CLI](#cli)
+- [Docker](#docker)
+- [Network deployment (HTTP)](#network-deployment-http)
+- [API whitelist](#api-whitelist)
+- [YAML templates](#yaml-templates)
+- [Architecture](#architecture)
+- [Community & support](#community--support)
 
-## Quick Start
+## What it does
 
-### 1. Install 
+- List and monitor clusters, views, tenants, quotas, snapshots, alerts, and hardware
+- Performance metrics and graphs; dataflow diagrams
+- Optional `--read-write` create/delete (views, snapshots, quotas, users, and more)
+- Desktop (stdio) or network (HTTP) with bearer token or OAuth/OIDC
+- Credentials via keyring, env vars, or Kubernetes secrets
+- Customize list tools via YAML templates
 
-Install vast-admin-mcp:
-
-```bash
-# If installed via pip
-pip install vast-admin-mcp
-
-```
-
-### 2. Initial Setup
-
-Configure your VAST cluster connection:
-
-```bash
-# If installed via pip
-vast-admin-mcp setup
-
-
-This will prompt you for:
-- Cluster address (IP, FQDN, or URL like `https://host:port`)
-- Username and password
-- Tenant (for tenant admins)
-- Tenant (for super admins - which tenant context to use)
-```
-
-### 3. Configure MCP Server in you AI assistance 
-
-Use `mcpsetup` to get instructions for common AI assistance tools:
-
-```bash
-# create the syntax for popular ai assistances (currently has builtin support for cursor,claude-desktop,windsurf,vscode)
-vast-admin-mcp mcpsetup vscode
-🔧 Configuring MCP server for: vscode
-   Detected command: vast-admin-mcp
-   Detected args: ['mcp']
-
-📋 VSCode Configuration Instructions
-   Config file location: /Users/user/.vscode/mcp.json
-
-    Create a new file if not exists, or add the VAST Admin MCP entry to the existing 'servers' section:
-    {
-        "servers": {
-            "VAST Admin MCP": {
-                "command": "vast-admin-mcp",
-                "args": [
-                    "mcp"
-                ]
-            }
-        }
-    }
-
-📝 Next steps:
-   1. Edit or create the config file at the location shown above
-   2. Restart VSCode
-   3. The MCP server should be available in VSCode's MCP tools
-   4. Test by asking VSCode to list VAST clusters
-```
-** Add the --read-write flag as a 2nd argument to be able to make updates in VAST clusters  
-
-
-## Prompt Examples
-#### For Read-only mode 
-```
-List all VAST clusters 
-List all views on cluster cluster1
-Show me all tenants across all clusters
-Create bandwidth and iops graph for cluster1 over the last hour
-create dataflow diagram for cluster1 for /path view on the tenant3 tenant for the last hour 
-show me dataflow diagram for 172.21.224.139 on cluster1
-Show me the hardware topology for cluster cluster1 
-Are there any issues with my configured data protection relationships ? 
-Create mini support bundle on cluster1 and name it bundle1. Timeframe should be yesterday at midnight for 4m. Generate it only for cnodes prefixed by cnode-128 and upload it to support without private data.
-Find all users prefixed with "s3" on cluster cluster1 tenant tenant1
-Are there any critical alerts on my clusters that were not acknoledged ?
-List all snapshots for view path /data/app1 on cluster cluster1 tenant tenant1
-Show me all quotas configured for tenant tenant1 on cluster cluster1
-Get performance metrics for cnodes on cluster cluster1 over the last 7 day
-Show me all view policies on cluster cluster1 that support S3 
-First, get all available clusters. Then compare views with path "/" across all clusters, showing capcity information
-Show me all tenants on cluster cluster1, for each tenant show me the 5 views with the highest used capacity
-Get performance metrics for cluster cluster1, then get metrics for all cnodes, and finally get metrics for top 3 views. Show me a summary of IOPS and bandwidth for each object type
-Find all views where logical used capacity is greater than 1TB. For each of these views, get their performance metrics over the last 24 hours and show which views have the highest IOPS
-```
-#### For Read-write mode 
-```
-Create a new NFS view on cluster cluster1 with path /data/newview in tenant tenant1
-Create a view on cluster cluster1 with path /shared/data in tenant tenant1 that supports both NFS and S3 protocols
-Create a snapshot named "backup-2024-01-15" for view path /data/app1 on cluster cluster1, tenant tenant1 and keep it for 24h
-Create a clone from snapshot "backup-2024-01-15" of view /data/app1. The clone should be at path /data/app1-clone in tenant tenant1 on cluster cluster1
-Set a hard quota of 10TB for view path /data/app1 on cluster cluster1, tenant tenant1
-Create 3 new views for vmware based on template. 
-Create a indestructible snapshot named resrote-point_<view name> for all vmware views on cluster1 
-Refresh a clone from most recent snapshot of view /data/app1 at path /data/app1-clone in tenant tenant1 on cluster cluster1
-```
-
-## Installation
-
-### Prerequisites
+## Requirements
 
 - **Python 3.10+**
-- **jq**: Command-line JSON processor (required for field transformations in YAML templates)
+- **jq** — required for field transformations in YAML templates
 
-#### Installing jq
-
-**macOS:**
 ```bash
+# macOS
 brew install jq
-```
 
-**Linux (Ubuntu/Debian):**
-```bash
+# Ubuntu/Debian
 sudo apt-get install jq
-```
 
-**Linux (RHEL/CentOS):**
-```bash
+# RHEL/CentOS
 sudo yum install jq
 ```
 
+## Quick start
 
-### Basic Installation
+### 1. Install
 
 ```bash
 pip install vast-admin-mcp
 ```
 
-### Optional Dependencies
-
-```bash
-# HTTP server support (for network deployment)
-pip install 'vast-admin-mcp[http]'
-
-# Kubernetes secrets support
-pip install 'vast-admin-mcp[k8s]'
-
-# SOCKS proxy support
-pip install 'vast-admin-mcp[socks]'
-
-# All optional dependencies
-pip install 'vast-admin-mcp[all]'
-```
-
-## Docker Installation
-
-### Building the Docker Image
-
-#### Quick Build (Recommended)
-
-Use the provided build script that automatically handles versioning:
-
-```bash
-make build-docker
-```
-
-This will:
-- Extract version from `src/vast_admin_mcp/__about__.py`
-- Tag the image with both version number and `latest`
-- Add metadata labels (version, build date, git commit)
-
-#### Manual Build
-
-```bash
-# Simple build
-docker build -t vast-admin-mcp:latest .
-
-# Build with version tags
-VERSION=$(grep -E '^__version__' src/vast_admin_mcp/__about__.py | sed 's/__version__\s*=\s*"\([^"]*\)"/\1/')
-docker build \
-  --build-arg VERSION="${VERSION}" \
-  --build-arg BUILD_DATE="$(date -u +'%Y-%m-%dT%H:%M:%SZ')" \
-  --build-arg VCS_REF="$(git rev-parse --short HEAD)" \
-  -t vast-admin-mcp:${VERSION} \
-  -t vast-admin-mcp:latest \
-  .
-```
-
-### Running CLI Commands in Docker
-
-#### Option 1: Using the helper script (recommended)
-
-```bash
-
-# Run any CLI command
-./vast-admin-mcp-docker.sh clusters
-./vast-admin-mcp-docker.sh list views --cluster cluster1
-./vast-admin-mcp-docker.sh setup
-./vast-admin-mcp-docker.sh mcpsetup cursor
-```
-
-#### Option 2: Using docker run directly
-
-```bash
-# One-off command execution
-docker run --rm -it \
-  -v ~/.vast-admin-mcp:/root/.vast-admin-mcp \
-  vast-admin-mcp:latest \
-  vast-admin-mcp list clusters
-```
-
-#### Option 3: Using docker-compose
-
-```bash
-# Optional: Set version (defaults to 0.1.3)
-export VERSION=0.2.7
-
-# Start container in background
-docker-compose up -d
-
-# Execute commands in running container
-docker-compose exec app vast-admin-mcp list clusters
-docker-compose exec app vast-admin-mcp setup
-
-# Stop container
-docker-compose down
-```
-
-### Volume Mounts
-
-The Docker setup mounts the following directories/files:
-
-1. **Config Directory** (`~/.vast-admin-mcp` → `/root/.vast-admin-mcp`):
-   - `config.json` - Cluster configurations
-   - `mcp_list_template_modifications.yaml` - User template customizations
-   - `vast_admin_mcp.log` - Log file
-
-2. **Default Template File** (built into image):
-   - `mcp_list_cmds_template.yaml` is copied into the image during build
-   - To override, mount a custom template file:
-     ```bash
-     docker run --rm -it \
-       -v ~/.vast-admin-mcp:/root/.vast-admin-mcp \
-       -v /path/to/custom-template.yaml:/app/mcp_list_cmds_template.yaml:ro \
-       vast-admin-mcp:latest \
-       vast-admin-mcp list clusters
-     ```
-
-**Volume Mounting Behavior:**
-
-- **`docker run`** (used by helper script by default): Volumes are mounted each time you run a command. No persistent container needed.
-- **`docker exec`** (with persistent containers): Volumes must be mounted when the container is created, not during exec. This is a Docker limitation - `docker exec` runs in an existing container and cannot mount new volumes.
-
-**Using the helper script** (`vast-admin-mcp-docker.sh`):
-- By default, uses `docker run` which mounts volumes automatically each time
-- Only uses `docker exec` if `DOCKER_CONTAINER_NAME` environment variable is set
-- No persistent container needed for normal usage
-
-**Using docker-compose:**
-- `docker-compose.yml` automatically mounts the config directory when the container is created
-- You can then use `docker-compose exec` to run commands in the persistent container
-
-**Creating a persistent container manually:**
-If you want to use `docker exec` with a persistent container, ensure volumes are mounted at creation:
-  ```bash
-  docker run -d --name vast-admin-mcp \
-    -v ~/.vast-admin-mcp:/root/.vast-admin-mcp \
-    vast-admin-mcp:latest tail -f /dev/null
-  ```
-
-### Configuring MCP Server for Desktop LLMs (Docker)
-
-When running `mcpsetup` inside Docker, it will automatically detect Docker and generate appropriate `docker run` or `docker exec` commands:
-
-```bash
-# Inside Docker container
-./vast-admin-mcp-docker.sh mcpsetup claude-desktop
-
-# Or using docker-compose
-docker-compose exec app vast-admin-mcp mcpsetup claude-desktop
-```
-
-The generated configuration will use Docker commands that the host can execute, with proper volume mounts for configuration files.
-
-**Environment Variables for Docker:**
-- `DOCKER_CONTAINER_NAME`: Use existing container name (for `docker exec`)
-- `DOCKER_IMAGE`: Docker image name (for `docker run`)
-- `DOCKER_CONFIG_MOUNT`: Container path for config mount (default: `/root/.vast-admin-mcp`)
-- `DOCKER_TEMPLATE_FILE`: Host path to custom template file (optional, for override)
-
-**Example:**
-```bash
-# Set container name for docker exec mode
-export DOCKER_CONTAINER_NAME=vast-admin-mcp
-./vast-admin-mcp-docker.sh mcpsetup cursor
-
-# Or set image for docker run mode
-export DOCKER_IMAGE=vast-admin-mcp:latest
-./vast-admin-mcp-docker.sh mcpsetup claude-desktop
-
-# With custom template file
-export DOCKER_TEMPLATE_FILE=/path/to/custom-template.yaml
-./vast-admin-mcp-docker.sh list clusters
-```
-
-## Network Deployment (HTTP)
-
-By default, the MCP server uses stdio transport for desktop AI assistant integration. For network access (remote clients, Kubernetes, containerized deployments), you can run the server with HTTP transport.
-
-### Starting the HTTP Server
-
-```bash
-# Basic HTTP server on localhost
-vast-admin-mcp mcp --transport http
-
-# HTTP server accessible from network
-vast-admin-mcp mcp --transport http --host 0.0.0.0 --port 8000
-
-# With authentication (recommended)
-export VAST_ADMIN_MCP_AUTH_TOKEN="your-secure-token"
-vast-admin-mcp mcp --transport http --host 0.0.0.0
-
-# With SSL/TLS
-vast-admin-mcp mcp --transport http --host 0.0.0.0 \
-    --ssl-cert /path/to/cert.pem \
-    --ssl-key /path/to/key.pem
-```
-
-The server exposes:
-- **MCP endpoint**: `http://hostname:8000/mcp/`
-- **Health check**: `http://hostname:8000/health`
-
-### Authentication
-
-#### Bearer Token (Simple)
-
-Set the `VAST_ADMIN_MCP_AUTH_TOKEN` environment variable:
-
-```bash
-export VAST_ADMIN_MCP_AUTH_TOKEN="vamt_your-secure-token"
-vast-admin-mcp mcp --transport http --host 0.0.0.0
-```
-
-Clients must include the header: `Authorization: Bearer vamt_your-secure-token`
-
-#### OAuth/OIDC (Production)
-
-Configure OAuth via the setup command:
+### 2. Configure cluster connection
 
 ```bash
 vast-admin-mcp setup
-# Select option 5: Configure HTTP server settings
-# Select option 2 or 3 for OAuth configuration
 ```
 
-Supports:
-- Built-in providers: GitHub, Google, Azure AD
-- Generic OAuth/OIDC: Okta, Keycloak, Auth0, or any OIDC-compliant provider
+Prompts for:
 
-### Per-user VAST credentials (behind a gateway)
+- Cluster address (IP, FQDN, or URL like `https://host:port`)
+- Username and password
+- Tenant (tenant admins, or which tenant context to use for super admins)
 
-By default every caller uses the credentials stored for a cluster in `config.json`. When the server runs behind a gateway that knows its users (for example a portal that signs them in against the same Active Directory as the clusters), a cluster can instead use **each caller's own VMS session**. VAST then applies that user's own roles and records their name:
+### 3. Configure your AI assistant
+
+```bash
+vast-admin-mcp mcpsetup cursor
+# also: claude-desktop | windsurf | vscode
+```
+
+Example VS Code entry (`~/.vscode/mcp.json`):
 
 ```json
 {
-  "cluster": "vms1.example.com",
-  "cluster_name": "cluster1",
-  "auth_method": "per_request",
-  "user_type": "SUPER_ADMIN",
-  "tenant": ""
-}
-```
-
-- The cluster entry stores no username, password or token. `cluster_name` is required, because the server never logs in to such a cluster to look its name up.
-- Each MCP HTTP request carries the caller's VMS access token for that cluster:
-
-  ```
-  X-VAST-Bearer: cluster1=<access token>, cluster2=<access token>
-  ```
-
-  Keys are a cluster's `cluster_name` or address, case-insensitive. The gateway gets the token with `POST https://<vms>/api/token/` (username and password; AD users work too) and refreshes it with `/api/token/refresh/`.
-- The header only applies to clusters set to `per_request`. The address always comes from `config.json`, so a caller can't point the server at another host. Clusters with stored credentials ignore the header and behave exactly as before.
-- Without a token for a `per_request` cluster, a call fails with a clear error and never falls back to other credentials. If VAST refuses the token (expired or revoked), the call fails with "VAST refused your token" instead of returning an empty list.
-- Clients are cached per token, in their own cache, for up to an hour. Graphs from `per_request` clusters get an unguessable file name.
-- Only the gateway should be able to reach the server: protect it with the bearer token above and don't expose it directly.
-
-### SSL/TLS
-
-#### Generate Self-Signed Certificate
-
-```bash
-# Generate certificate (stored in ~/.vast-admin-mcp/ssl/)
-vast-admin-mcp gencert
-
-# With custom options
-vast-admin-mcp gencert --cn mcp.example.com --days 365
-
-# Add additional Subject Alternative Names
-vast-admin-mcp gencert --san mcp.example.com --san 192.168.1.100
-```
-
-#### Use with HTTP Server
-
-```bash
-vast-admin-mcp mcp --transport http --host 0.0.0.0 \
-    --ssl-cert ~/.vast-admin-mcp/ssl/cert.pem \
-    --ssl-key ~/.vast-admin-mcp/ssl/key.pem
-```
-
-### Docker HTTP Mode
-
-```bash
-# Start in HTTP mode
-MCP_TRANSPORT=http docker-compose up -d
-
-# With authentication
-VAST_ADMIN_MCP_AUTH_TOKEN="your-token" MCP_TRANSPORT=http docker-compose up -d
-
-# Server available at http://localhost:8000/mcp/
-```
-
-### systemd (Linux host)
-
-To run the HTTP MCP server as a persistent Linux service with `systemctl`, see [`deploy/systemd/`](deploy/systemd/).
-
-```bash
-# After install + setup, install the unit and start:
-sudo cp deploy/systemd/vast-admin-mcp.service /etc/systemd/system/
-sudo systemctl daemon-reload
-sudo systemctl enable --now vast-admin-mcp
-```
-
-Full steps (user account, auth token, HTTPS, troubleshooting): [systemd Deployment Guide](deploy/systemd/README.md).
-
-### Kubernetes / OpenShift Deployment
-
-Complete Kubernetes and OpenShift manifests are provided in [`deploy/kubernetes/`](deploy/kubernetes/). 
-See the [Kubernetes Deployment Guide](deploy/kubernetes/README.md) for detailed instructions.
-
-#### Quick Start
-
-```bash
-# 1. Create namespace
-kubectl create namespace vast-admin-mcp
-
-# 2. Edit vast-admin-mcp.yaml with your credentials and cluster config
-
-# 3. Deploy (HTTP)
-kubectl apply -f deploy/kubernetes/vast-admin-mcp.yaml -n vast-admin-mcp
-
-# For HTTPS: create TLS secret and enable HTTPS in the manifest (see comments)
-./deploy/kubernetes/create-tls-secret.sh -n vast-admin-mcp
-```
-
-#### Available Manifests
-
-| File | Description |
-|------|-------------|
-| `vast-admin-mcp.yaml` | Main deployment manifest (HTTP/HTTPS) |
-| `openshift-route.yaml` | OpenShift Route configuration |
-| `create-tls-secret.sh` | Helper script for TLS certificates |
-
-#### Access Methods
-
-| Method | URL | Use Case |
-|--------|-----|----------|
-| NodePort | `http(s)://<node-ip>:30800/mcp/` | Simple external access |
-| Ingress | `https://mcp.example.com/mcp/` | Domain-based access with TLS termination |
-| OpenShift Route | `https://mcp.apps.cluster.com/mcp/` | OpenShift native |
-| ClusterIP + Port Forward | `http://localhost:8000/mcp/` | Development/testing |
-
-#### K8s Secrets Integration
-
-The application reads credentials from Kubernetes Secrets using the pattern:
-```
-k8s:<namespace>/<secret-name>/<key>
-```
-
-Example in config.json:
-```json
-{
-  "clusters": [{
-    "cluster": "vms1.example.com",
-    "password": "k8s:vast-admin-mcp/vast-admin-mcp-secrets/vms1-password"
-  }],
-  "http_server": {
-    "auth": {
-      "type": "bearer",
-      "token": "k8s:vast-admin-mcp/vast-admin-mcp-secrets/auth-token"
+  "servers": {
+    "VAST Admin MCP": {
+      "command": "vast-admin-mcp",
+      "args": ["mcp"]
     }
   }
 }
 ```
 
-#### OpenShift
+Restart the IDE, then ask it to list VAST clusters.
 
-For OpenShift, use the Route for external access:
+> **Read-write:** add `"--read-write"` as a second arg (`"args": ["mcp", "--read-write"]`) to enable create/delete tools.
+
+## Prompt examples
+
+### Inventory and capacity
+
+```
+List all VAST clusters
+Show me all tenants on cluster1; for each, the 5 views with the highest used capacity
+Show me all quotas configured for tenant tenant1 on cluster cluster1
+Are there any critical alerts on my clusters that were not acknowledged?
+```
+
+### Performance and dataflow
+
+```
+Create bandwidth and IOPS graph for cluster1 over the last hour
+Create dataflow diagram for cluster1 for /path view on tenant3 for the last hour
+Show me the hardware topology for cluster cluster1
+```
+
+### Read-write (requires `--read-write`)
+
+```
+Create a new NFS view on cluster cluster1 with path /data/newview in tenant tenant1
+Create a snapshot named "backup-2024-01-15" for view path /data/app1 on cluster cluster1, tenant tenant1 and keep it for 24h
+Set a hard quota of 10TB for view path /data/app1 on cluster cluster1, tenant tenant1
+```
+
+More examples: [docs/prompt-examples.md](docs/prompt-examples.md).
+
+## Installation
 
 ```bash
-oc apply -f deploy/kubernetes/vast-admin-mcp.yaml -n vast-admin-mcp
-oc apply -f deploy/kubernetes/openshift-route.yaml -n vast-admin-mcp
+pip install vast-admin-mcp
 ```
 
-The Route supports edge (default), passthrough, and re-encrypt TLS termination modes.
-
-### Setup Menu for HTTP Configuration
-
-Run `vast-admin-mcp setup` to interactively configure HTTP server settings:
-
-```
-VAST Admin MCP - Configuration Management
-==========================================
-HTTP Server: Disabled
-
-Available options:
-  5. Configure HTTP server settings
-  6. Manage authentication token
-```
-
-Option 5 allows you to configure:
-- Enable/disable HTTP server
-- Host, port, and URL path
-- Authentication (bearer token, OAuth, or none)
-- SSL/TLS (existing certs, generate self-signed, or none)
-
-Option 6 allows you to:
-- Generate new authentication tokens
-- View or export current token
-- Rotate tokens
-
-## CLI
-
-You can test functions:
-
-### List Available Commands
+### Optional dependencies
 
 ```bash
-vast-admin-mcp list
-# Or
-./vast-admin-mcp.sh list
+# HTTP server (network deployment)
+pip install 'vast-admin-mcp[http]'
+
+# Kubernetes secrets
+pip install 'vast-admin-mcp[k8s]'
+
+# SOCKS proxy
+pip install 'vast-admin-mcp[socks]'
+
+# Everything
+pip install 'vast-admin-mcp[all]'
 ```
-
-### Execute a Dynamic Command
-
-```bash
-# List views
-vast-admin-mcp list views --cluster vast3115-var
-
-# List tenants with JSON output
-vast-admin-mcp list tenants --format json
-
-# List views with filters
-vast-admin-mcp list views --cluster cluster1 --tenant mytenant
-
-# Save output to file
-vast-admin-mcp list views --cluster cluster1 --output views.csv --format csv
-```
-
-### Static Commands
-
-```bash
-# List clusters
-vast-admin-mcp clusters
-
-# List performance metrics
-vast-admin-mcp performance --object-name tenant --cluster vast3115-var
-
-# Query users
-vast-admin-mcp query-users --cluster vast3115-var --prefix user
-```
-
-### Create Commands
-
-```bash
-# Create a view
-vast-admin-mcp create view --cluster cluster1 --path /myview --protocols NFS
-
-# Create a view from template
-vast-admin-mcp create view-from-template --cluster cluster1 --template-name mytemplate
-
-# Create a snapshot
-vast-admin-mcp create snapshot --cluster cluster1 --path /myview --name mysnapshot
-
-# Create a clone
-vast-admin-mcp create clone --cluster cluster1 --source-path /myview --source-snapshot mysnapshot --destination-path /myclone
-
-# Create or update quota
-vast-admin-mcp create quota --cluster cluster1 --path /myview --hard-limit 10GB
-```
-
-### Output Formats
-
-- `table` (default): Human-readable table format
-- `json`: JSON output
-- `csv`: CSV format
-
-## MCP Tools
-
-### Static List Tools
-
-- **list_clusters_vast**: Retrieve information about VAST clusters, their status, capacity and usage
-- **list_performance_vast**: Retrieve performance metrics for VAST cluster objects
-- **query_users_vast**: Query user names from VAST cluster
-
-### Dynamic List Tools
-
-Additional list tools are automatically registered from the YAML template file located at `~/.vast-admin-mcp/mcp_list_cmds_template.yaml`. These tools follow the naming pattern `list_{command_name}_vast`.
-
-**Note**: Commands with `create_mcp_tool: false` in the YAML template will not be registered as standalone MCP tools. They can still be used in merged commands and via CLI, but won't appear in the MCP tool list.
-
-### Create Tools
-
-The following create tools are available when the MCP server is started with `--read-write`:
-
-- **create_view_vast**: Create a new VAST view (supports NFS/S3/SMB/ENDPOINT/DATABASE/KAFKA; Kafka needs `kafka_vip_pools`)
-- **create_view_from_template_vast**: Create views from a predefined template
-- **create_snapshot_vast**: Create a snapshot for a VAST view
-- **create_clone_vast**: Create a clone from a snapshot
-- **create_quota_vast**: Create or update quota for a specific path and tenant
-- **create_tenant_vast**: Create a tenant with `client_ip_ranges`
-- **create_vippool_vast**: Create a VIP pool (supports explicit tenantless pools)
-- **create_user_vast**: Create a local user
-- **create_viewpolicy_vast**: Create a view policy
-- **create_s3_key_vast**: Create a local S3 access key (uses `query_users`; max 2 keys per user)
-
-### Delete Tools
-
-YAML-driven delete tools from `delete_cmds` (also require `--read-write`):
-
-- **delete_vippools_vast**
-- **delete_users_vast**
-- **delete_viewpolicies_vast**
-- **delete_views_vast**
-- **delete_s3_keys_vast**
-
-Tenant delete is intentionally not exposed. Add more deletes by extending `delete_cmds` + `api_whitelist` (see [TEMPLATE_STRUCTURE.md](TEMPLATE_STRUCTURE.md)).
-
-**Note**: Create/delete tools are registered only when the MCP server is started with `--read-write`. In readonly mode they are not exposed to LLMs at all.
 
 ## Configuration
 
-- **Config File**: `~/.vast-admin-mcp/config.json` (cluster configurations, no env var override)
-- **Default Template File**: `mcp_list_cmds_template.yaml` in project root (shipped template)
-- **Template Modifications File**: `~/.vast-admin-mcp/mcp_list_template_modifications.yaml` (user customizations)
-- **View Templates File**: `~/.vast-admin-mcp/view_templates.json` (for view template-based creation). This file can be modified based on the template example `view_templates_example.yaml` in project root (shipped template)
-- **Log Files**: `~/.vast-admin-mcp/vast_admin_mcp.log`
+| Path | Purpose |
+|------|---------|
+| `~/.vast-admin-mcp/config.json` | Cluster configurations |
+| `mcp_list_cmds_template.yaml` (project root) | Shipped default list-tool template |
+| `~/.vast-admin-mcp/mcp_list_template_modifications.yaml` | User template customizations |
+| `~/.vast-admin-mcp/view_templates.json` | View template-based creation (see `view_templates_example.json`) |
+| `~/.vast-admin-mcp/vast_admin_mcp.log` | Log file |
 
-### Capacity Unit Base
+### Capacity unit base
 
-Capacity display and parsing default to SI decimal (base-1000), matching the VAST GUI (`1 TB = 10^12` bytes). To use binary (base-1024) conversion instead, set in `~/.vast-admin-mcp/config.json`:
+Defaults to SI decimal (base-1000), matching the VAST GUI (`1 TB = 10^12` bytes). For binary (base-1024):
 
 ```json
 {
@@ -669,188 +167,220 @@ Capacity display and parsing default to SI decimal (base-1000), matching the VAS
 }
 ```
 
-Accepted values: `1000` / `"decimal"` / `"si"` (default), or `1024` / `"binary"` / `"iec"` / `"base2"`. With base `1024`, AUTO capacity fields use IEC labels (`TiB`, `GiB`, …). Explicit IEC size strings (`1TiB`) are always binary regardless of this setting.
+Accepted: `1000` / `"decimal"` / `"si"` (default), or `1024` / `"binary"` / `"iec"` / `"base2"`. With base `1024`, AUTO capacity fields use IEC labels (`TiB`, `GiB`, …). Explicit IEC strings (`1TiB`) are always binary.
 
-### Environment Variables
+### Environment variables
 
-#### Authentication
-
-- `VAST_ADMIN_MCP_AUTH_TOKEN`: Bearer token for HTTP authentication
+**HTTP auth**
 
 ```bash
 export VAST_ADMIN_MCP_AUTH_TOKEN="vamt_your-secure-token"
-vast-admin-mcp mcp --transport http --host 0.0.0.0
 ```
 
-#### Template File Paths
+**Template paths**
 
-Template file paths can be overridden using environment variables:
+- `VAST_ADMIN_MCP_DEFAULT_TEMPLATE_FILE`
+- `VAST_ADMIN_MCP_TEMPLATE_MODIFICATIONS_FILE`
+- `VAST_ADMIN_MCP_VIEW_TEMPLATE_FILE`
 
-- `VAST_ADMIN_MCP_DEFAULT_TEMPLATE_FILE`: Override default template file path
-- `VAST_ADMIN_MCP_TEMPLATE_MODIFICATIONS_FILE`: Override template modifications file path
-- `VAST_ADMIN_MCP_VIEW_TEMPLATE_FILE`: Override view templates file path
+**Proxy** — `HTTPS_PROXY`, `HTTP_PROXY`, `ALL_PROXY`, `NO_PROXY`. Full details: [docs/proxy.md](docs/proxy.md).
 
-Example:
+## MCP tools
+
+### Static list tools
+
+- **list_clusters_vast** — clusters, status, capacity, usage
+- **list_performance_vast** — performance metrics for cluster objects
+- **query_users_vast** — query user names
+
+### Dynamic list tools
+
+Registered from the YAML template (`list_{command_name}_vast`). Commands with `create_mcp_tool: false` stay available via CLI/merged commands but are not standalone MCP tools.
+
+### Create tools (`--read-write`)
+
+- **create_view_vast** — NFS/S3/SMB/ENDPOINT/DATABASE/KAFKA (Kafka needs `kafka_vip_pools`)
+- **create_view_from_template_vast**
+- **create_snapshot_vast** / **create_clone_vast**
+- **create_quota_vast**
+- **create_tenant_vast** — with `client_ip_ranges`
+- **create_vippool_vast** — supports explicit tenantless pools
+- **create_user_vast** / **create_viewpolicy_vast**
+- **create_s3_key_vast** — via `query_users`; max 2 keys per user
+
+### Delete tools (`--read-write`)
+
+YAML-driven from `delete_cmds`:
+
+- **delete_vippools_vast**, **delete_users_vast**, **delete_viewpolicies_vast**, **delete_views_vast**, **delete_s3_keys_vast**
+
+Tenant delete is not exposed. Extend via `delete_cmds` + `api_whitelist` — see [TEMPLATE_STRUCTURE.md](TEMPLATE_STRUCTURE.md).
+
+> Create/delete tools are registered only with `--read-write`. In read-only mode they are not exposed to LLMs. All mutating calls still pass the [API whitelist](#api-whitelist).
+
+## CLI
 
 ```bash
-export VAST_ADMIN_MCP_DEFAULT_TEMPLATE_FILE=/custom/path/default_template.yaml
-export VAST_ADMIN_MCP_TEMPLATE_MODIFICATIONS_FILE=/custom/path/modifications.yaml
-export VAST_ADMIN_MCP_VIEW_TEMPLATE_FILE=/custom/path/view_templates.json
-vast-admin-mcp list views
-```
+# Discover commands
+vast-admin-mcp list
 
-#### Proxy Configuration
-
-The server supports HTTP/HTTPS and SOCKS proxies for reaching VAST clusters through corporate or enterprise network environments. Proxies are configured via standard environment variables:
-
-- `HTTPS_PROXY` or `https_proxy` — highest precedence (recommended for VAST since the API uses HTTPS)
-- `HTTP_PROXY` or `http_proxy` — fallback
-- `ALL_PROXY` or `all_proxy` — catch-all, recommended for SOCKS proxies
-
-**Bypassing the proxy (`NO_PROXY`):**
-
-Use `NO_PROXY` (or `no_proxy`) to list hosts that should connect directly, without going through the proxy. Separate multiple entries with commas. A wildcard `*` bypasses the proxy for all hosts.
-
-```bash
-# Skip proxy for internal VAST clusters
-export NO_PROXY=vast-cluster1.internal,10.0.0.5
-```
-
-**HTTP/HTTPS proxy examples:**
-
-```bash
-# Basic HTTP proxy
-export HTTPS_PROXY=http://proxy.example.com:8080
-
-# Proxy with authentication
-export HTTPS_PROXY=http://username:password@proxy.example.com:8080
-
-# Run commands as normal — proxy is picked up automatically
-vast-admin-mcp clusters
+# Dynamic list commands
 vast-admin-mcp list views --cluster cluster1
+vast-admin-mcp list tenants --format json
+vast-admin-mcp list views --cluster cluster1 --output views.csv --format csv
+
+# Static commands
+vast-admin-mcp clusters
+vast-admin-mcp performance --object-name tenant --cluster cluster1
+vast-admin-mcp query-users --cluster cluster1 --prefix user
+
+# Create
+vast-admin-mcp create view --cluster cluster1 --path /myview --protocols NFS
+vast-admin-mcp create view-from-template --cluster cluster1 --template-name mytemplate
+vast-admin-mcp create snapshot --cluster cluster1 --path /myview --name mysnapshot
+vast-admin-mcp create clone --cluster cluster1 --source-path /myview --source-snapshot mysnapshot --destination-path /myclone
+vast-admin-mcp create quota --cluster cluster1 --path /myview --hard-limit 10GB
 ```
 
-**SOCKS proxy support:**
+Output formats: `table` (default), `json`, `csv`.
 
-SOCKS proxies (SOCKS4, SOCKS4a, SOCKS5, SOCKS5h) are supported but require the optional `PySocks` library:
+## Docker
 
 ```bash
-# Install PySocks for SOCKS proxy support
-pip install 'vast-admin-mcp[socks]'
-# — or directly —
-pip install pysocks
+make build-docker
 
-# SOCKS5 proxy (client-side DNS resolution)
-export ALL_PROXY=socks5://proxy.example.com:1080
-
-# SOCKS5h proxy (remote DNS resolution — recommended for internal hostnames)
-export ALL_PROXY=socks5h://proxy.example.com:1080
-
-# SOCKS5 with authentication
-export ALL_PROXY=socks5h://username:password@proxy.example.com:1080
-
-# SOCKS4 proxy
-export ALL_PROXY=socks4://proxy.example.com:1080
+./vast-admin-mcp-docker.sh setup
+./vast-admin-mcp-docker.sh list clusters
+./vast-admin-mcp-docker.sh mcpsetup cursor
 ```
 
-**Proxy types at a glance:**
+Or:
 
-| Type | Description | Env var | Dependency |
-|------|-------------|---------|------------|
-| HTTP/HTTPS | Standard corporate proxies | `HTTPS_PROXY` / `HTTP_PROXY` | Built-in |
-| SOCKS5 | SOCKS5 with client-side DNS | `ALL_PROXY` | PySocks |
-| SOCKS5h | SOCKS5 with remote DNS (recommended for privacy) | `ALL_PROXY` | PySocks |
-| SOCKS4 | Legacy SOCKS4 protocol | `ALL_PROXY` | PySocks |
-| SOCKS4a | SOCKS4 with remote DNS | `ALL_PROXY` | PySocks |
+```bash
+docker run --rm -it \
+  -v ~/.vast-admin-mcp:/root/.vast-admin-mcp \
+  vast-admin-mcp:latest \
+  vast-admin-mcp list clusters
+```
 
-> **Note:** Any proxy env var will work with any proxy type, but using `ALL_PROXY` for SOCKS proxies follows standard conventions and keeps your configuration clear.
+Mount `~/.vast-admin-mcp` for config and logs. Full build options, volume behavior, compose, and HTTP mode: [docs/docker.md](docs/docker.md).
 
-## API Whitelist
+## Network deployment (HTTP)
 
-The API whitelist provides security by restricting which VAST API endpoints and HTTP methods can be accessed. It is configured in the YAML template file's `api_whitelist` section.
+Default transport is stdio (desktop). For remote clients, Kubernetes, or containers, use HTTP:
 
-### Default Behavior
+```bash
+vast-admin-mcp mcp --transport http
+vast-admin-mcp mcp --transport http --host 0.0.0.0 --port 8000
 
-- **Simple format** (`- views`): Defaults to **GET only**
-- **With methods** (`- views: [post]`): Allows **GET + specified methods**
-  - Example: `- views: [post]` enables both GET and POST for the views endpoint
-  - Example: `- quotas: [post, patch]` enables GET, POST, and PATCH for the quotas endpoint
+export VAST_ADMIN_MCP_AUTH_TOKEN="your-secure-token"
+vast-admin-mcp mcp --transport http --host 0.0.0.0
 
-### Configuration
+vast-admin-mcp mcp --transport http --host 0.0.0.0 \
+    --ssl-cert /path/to/cert.pem \
+    --ssl-key /path/to/key.pem
+```
 
-The whitelist is defined in the YAML template file:
+Endpoints: `http://hostname:8000/mcp/` (MCP), `http://hostname:8000/health` (health).
+
+### Authentication
+
+**Bearer token**
+
+```bash
+export VAST_ADMIN_MCP_AUTH_TOKEN="vamt_your-secure-token"
+```
+
+Clients send `Authorization: Bearer vamt_your-secure-token`.
+
+**OAuth/OIDC** — via `vast-admin-mcp setup` → option 5 (HTTP settings). Built-in: GitHub, Google, Azure AD. Generic OIDC: Okta, Keycloak, Auth0, and others.
+
+**Interactive setup** — `vast-admin-mcp setup` options 5 (host/port/auth/TLS) and 6 (generate/view/rotate bearer tokens).
+
+### SSL/TLS
+
+```bash
+vast-admin-mcp gencert
+vast-admin-mcp gencert --cn mcp.example.com --days 365 --san mcp.example.com --san 192.168.1.100
+
+vast-admin-mcp mcp --transport http --host 0.0.0.0 \
+    --ssl-cert ~/.vast-admin-mcp/ssl/cert.pem \
+    --ssl-key ~/.vast-admin-mcp/ssl/key.pem
+```
+
+### Per-user VAST credentials
+
+Opt-in per cluster with `"auth_method": "per_request"`. The cluster stores no credentials; each HTTP request carries the caller's VMS token in `X-VAST-Bearer`. Full behavior and security notes: [docs/per-request-auth.md](docs/per-request-auth.md).
+
+### systemd
+
+```bash
+sudo cp deploy/systemd/vast-admin-mcp.service /etc/systemd/system/
+sudo systemctl daemon-reload
+sudo systemctl enable --now vast-admin-mcp
+```
+
+Details: [deploy/systemd/README.md](deploy/systemd/README.md).
+
+### Kubernetes / OpenShift
+
+Manifests in [`deploy/kubernetes/`](deploy/kubernetes/). Guide: [deploy/kubernetes/README.md](deploy/kubernetes/README.md).
+
+```bash
+kubectl create namespace vast-admin-mcp
+# Edit credentials/config in the manifest, then:
+kubectl apply -f deploy/kubernetes/vast-admin-mcp.yaml -n vast-admin-mcp
+```
+
+| Access | URL |
+|--------|-----|
+| NodePort | `http(s)://<node-ip>:30800/mcp/` |
+| Ingress | `https://mcp.example.com/mcp/` |
+| OpenShift Route | `https://mcp.apps.cluster.com/mcp/` |
+| Port-forward | `http://localhost:8000/mcp/` |
+
+K8s secret references use `k8s:<namespace>/<secret-name>/<key>` in `config.json`. OpenShift: apply `openshift-route.yaml` for external access (edge / passthrough / re-encrypt).
+
+## API whitelist
+
+Restricts which VAST API endpoints and HTTP methods the server may call (`api_whitelist` in the YAML template).
+
+- Simple (`- views`) → **GET only**
+- With methods (`- views: [post]`) → **GET + listed methods**
+- Unknown endpoints are denied; parent whitelist covers sub-endpoints (e.g. `monitors` → `monitors.ad_hoc_query`)
 
 ```yaml
 api_whitelist:
-  # Simple format - GET only
   - clusters
   - tenants
-  
-  # With methods - GET + specified methods
-  - views: [post]  # GET + POST for create operations
-  - snapshots: [post]  # GET + POST for create operations
-  - quotas: [post, patch]  # GET + POST + PATCH for create/update operations
+  - views: [post]
+  - snapshots: [post]
+  - quotas: [post, patch]
 ```
 
-### Security Model
+Create/delete operations require explicit method entries. See [TEMPLATE_STRUCTURE.md](TEMPLATE_STRUCTURE.md).
 
-- **Restrictive by default**: If an endpoint is not in the whitelist, it is denied
-- **Method validation**: Only specified HTTP methods are allowed
-- **Sub-endpoint support**: If a parent endpoint is whitelisted (e.g., `monitors`), all sub-endpoints are allowed (e.g., `monitors.ad_hoc_query`)
+## YAML templates
 
-### Why This Matters
+Dynamic list (and delete) tools come from the YAML template. Each command defines `api_endpoints`, optional `per_row_endpoints`, `fields`, `arguments`, and `description`.
 
-All API calls are validated against the whitelist. This ensures:
-- Only approved endpoints can be accessed
-- Only approved HTTP methods can be used
-- Create operations require explicit whitelist configuration (e.g., `- views: [post]`)
-
-## YAML Template Structure
-
-The YAML template file defines dynamic list functions. See [TEMPLATE_STRUCTURE.md](TEMPLATE_STRUCTURE.md) for complete documentation.
-
-Each command in the YAML file defines:
-
-- **api_endpoints**: Which VAST API endpoints to call
-- **per_row_endpoints** (optional): Endpoints called for each row in the base dataset, with query parameters derived from row data using `$field_name` syntax
-- **fields**: Output fields with transformations (jq, unit conversion, summaries)
-- **arguments**: MCP tool parameters with validation
-- **description**: Tool description for MCP context
-
-See [TEMPLATE_STRUCTURE.md](TEMPLATE_STRUCTURE.md) for detailed examples and best practices.
+Full reference: [TEMPLATE_STRUCTURE.md](TEMPLATE_STRUCTURE.md).
 
 ## Architecture
 
-The server uses:
-- **fastmcp**: MCP server framework
-- **vastpy**: VAST API client
-- **template_parser**: YAML template parsing
-- **command_executor**: Dynamic command execution
-- **jq**: System command-line tool for JSON transformations (required for jq expressions in YAML templates)
+- **fastmcp** — MCP server framework
+- **vastpy** — VAST API client
+- **template_parser** / **command_executor** — YAML-driven tools
+- **jq** — JSON field transformations
 
-## Create And Delete Functions
+## Community & support
 
-Create and delete functions are available when the MCP server is started with the `--read-write` flag.
-
-Create tools include views (including Kafka/DATABASE), view-from-template, snapshots, clones, quotas, tenants, VIP pools, users, view policies, and S3 access keys.
-
-Delete tools are generated from the YAML `delete_cmds` section (`delete_vippools_vast`, `delete_users_vast`, `delete_viewpolicies_vast`, `delete_views_vast`, `delete_s3_keys_vast`). Tenant delete is not exposed.
-
-**Important**: These tools are only exposed when the MCP server is started with `--read-write`.
-
-**Security**: All create/delete functions use API whitelisting to ensure only allowed endpoints and HTTP methods can be accessed. See [API Whitelist](#api-whitelist) section for details.
-
-## Community & Support
-
-VAST Admin MCP Server welcomes questions, feedback, and feature requests. Join the conversation on https://community.vastdata.com/
+Questions and feature requests: [community.vastdata.com](https://community.vastdata.com/)
 
 ## License
 
-Apache License 2.0
-
-See [LICENSE](LICENSE) file for details.
+Apache License 2.0 — see [LICENSE](LICENSE).
 
 ## Author
 
 Haim Marko <haim.marko@vastdata.com>
-

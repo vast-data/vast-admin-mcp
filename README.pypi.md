@@ -168,15 +168,13 @@ See the [full documentation](https://github.com/vast-data/vast-admin-mcp#readme)
 
 ## Documentation
 
-For comprehensive documentation, including:
-- Detailed installation instructions
-- Template customization guide
-- API whitelist configuration
-- Advanced Docker usage
-- Security best practices
-- Full prompt examples
+Full docs on GitHub: https://github.com/vast-data/vast-admin-mcp#readme
 
-Visit: https://github.com/vast-data/vast-admin-mcp#readme
+- [Docker guide](https://github.com/vast-data/vast-admin-mcp/blob/main/docs/docker.md)
+- [Proxy configuration](https://github.com/vast-data/vast-admin-mcp/blob/main/docs/proxy.md)
+- [Per-user VAST credentials](https://github.com/vast-data/vast-admin-mcp/blob/main/docs/per-request-auth.md)
+- [Prompt examples](https://github.com/vast-data/vast-admin-mcp/blob/main/docs/prompt-examples.md)
+- [Template structure](https://github.com/vast-data/vast-admin-mcp/blob/main/TEMPLATE_STRUCTURE.md)
 
 ## Platform Support
 

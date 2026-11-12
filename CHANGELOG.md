@@ -20,7 +20,7 @@ All notable changes to this project will be documented in this file.
 
 ### Added
 
-- **Per-user VAST credentials** -- opt-in per cluster with `"auth_method": "per_request"`. The cluster stores no credentials; each MCP HTTP request carries the caller's own VMS session token in `X-VAST-Bearer: <cluster>=<token>`, sent to VMS as `Authorization: Bearer`. VAST applies that user's roles and records their name. Clients are cached per token (separate `bearer_client` cache, 1 h), a missing or refused token fails the call with a clear error (never an empty list, never another login), and graphs from these clusters get unguessable file names. Clusters with stored credentials are unchanged and ignore the header. See README "Per-user VAST credentials".
+- **Per-user VAST credentials** -- opt-in per cluster with `"auth_method": "per_request"`. The cluster stores no credentials; each MCP HTTP request carries the caller's own VMS session token in `X-VAST-Bearer: <cluster>=<token>`, sent to VMS as `Authorization: Bearer`. VAST applies that user's roles and records their name. Clients are cached per token (separate `bearer_client` cache, 1 h), a missing or refused token fails the call with a clear error (never an empty list, never another login), and graphs from these clusters get unguessable file names. Clusters with stored credentials are unchanged and ignore the header. See [docs/per-request-auth.md](docs/per-request-auth.md).
 
 ### Fixed
 
