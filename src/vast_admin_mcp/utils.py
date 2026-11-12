@@ -368,6 +368,9 @@ def logging_main(debug: bool = False):
     formatter = logging.Formatter('%(asctime)s - %(levelname)s - %(message)s')
     formatterdebug = logging.Formatter('%(asctime)s - %(levelname)s - %(funcName)s - %(message)s')
     
+    # Ensure log directory exists (fresh CI / first-run homes have no ~/.vast-admin-mcp)
+    os.makedirs(os.path.dirname(LOG_PATH), exist_ok=True)
+
     # create file handler which logs even debug messages
     fh = logging.handlers.RotatingFileHandler(LOG_PATH, maxBytes=LOG_FILE_MAX_BYTES, backupCount=LOG_FILE_BACKUP_COUNT)
     fh.setLevel(logging.DEBUG)
