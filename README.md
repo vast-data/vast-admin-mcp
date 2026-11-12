@@ -380,7 +380,3 @@ Questions and feature requests: [community.vastdata.com](https://community.vastd
 ## License
 
 Apache License 2.0 — see [LICENSE](LICENSE).
-
-## Author
-
-Haim Marko <haim.marko@vastdata.com>
