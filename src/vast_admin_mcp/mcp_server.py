@@ -2020,9 +2020,16 @@ def start_mcp(
                 logging.error(f"Error creating S3 key: {e}")
                 raise
 
-        logging.info("Registered create tools (available in read-write mode only)")
+        logging.info(
+            "Registered create tools: create_view_vast, create_view_from_template_vast, "
+            "create_snapshot_vast, create_clone_vast, create_quota_vast, "
+            "create_support_bundle_vast, create_tenant_vast, create_vippool_vast, "
+            "create_user_vast, create_viewpolicy_vast, create_s3_key_vast"
+        )
     elif CREATE_FUNCTIONS_AVAILABLE:
         logging.info("Skipping create tools (readonly mode; pass --read-write to expose them)")
+    else:
+        logging.warning("Create tools unavailable (create_functions import failed)")
 
     # Register YAML-driven delete tools from delete_cmds (read-write only).
     if DELETE_FUNCTIONS_AVAILABLE and read_write:

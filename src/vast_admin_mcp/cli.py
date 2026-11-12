@@ -1608,8 +1608,13 @@ def _handle_command_execution(
     """
     logging_main(debug=args.debug)
     
-    # Handle --mcp flag for debug output
-    if args.mcp and mcp_code_generator:
+    # Handle --mcp flag for debug output (print MCP function only; never execute)
+    if getattr(args, 'mcp', False):
+        if not mcp_code_generator:
+            raise ValueError(
+                f"--mcp is not supported for '{command_name}' "
+                "(no MCP code generator wired for this command)"
+            )
         python_code = mcp_code_generator()
         print(python_code)
         return
@@ -1830,6 +1835,56 @@ def handle_create_support_bundle_command(args):
     )
 
 
+def _generate_create_tenant_mcp_code() -> str:
+    return _generate_create_mcp_code(
+        func=create_tenant,
+        tool_name="create_tenant_vast",
+        description="Create a VAST tenant with client IP ranges",
+        return_type="Dict[str, Any]",
+        error_message="Error creating tenant",
+    )
+
+
+def _generate_create_vippool_mcp_code() -> str:
+    return _generate_create_mcp_code(
+        func=create_vippool,
+        tool_name="create_vippool_vast",
+        description="Create a VAST VIP pool (supports tenantless pools)",
+        return_type="Dict[str, Any]",
+        error_message="Error creating vippool",
+    )
+
+
+def _generate_create_user_mcp_code() -> str:
+    return _generate_create_mcp_code(
+        func=create_user,
+        tool_name="create_user_vast",
+        description="Create a local VAST user",
+        return_type="Dict[str, Any]",
+        error_message="Error creating user",
+    )
+
+
+def _generate_create_viewpolicy_mcp_code() -> str:
+    return _generate_create_mcp_code(
+        func=create_viewpolicy,
+        tool_name="create_viewpolicy_vast",
+        description="Create a VAST view policy",
+        return_type="Dict[str, Any]",
+        error_message="Error creating view policy",
+    )
+
+
+def _generate_create_s3_key_mcp_code() -> str:
+    return _generate_create_mcp_code(
+        func=create_s3_key,
+        tool_name="create_s3_key_vast",
+        description="Create a local S3 access key for a VAST user",
+        return_type="Dict[str, Any]",
+        error_message="Error creating S3 key",
+    )
+
+
 def handle_create_tenant_command(args):
     """Handle create tenant command"""
     def _execute():
@@ -1844,6 +1899,7 @@ def handle_create_tenant_command(args):
         func=_execute,
         args=args,
         command_name="create-tenant",
+        mcp_code_generator=_generate_create_tenant_mcp_code,
     )
 
 
@@ -1869,6 +1925,7 @@ def handle_create_vippool_command(args):
         func=_execute,
         args=args,
         command_name="create-vippool",
+        mcp_code_generator=_generate_create_vippool_mcp_code,
     )
 
 
@@ -1887,6 +1944,7 @@ def handle_create_user_command(args):
         func=_execute,
         args=args,
         command_name="create-user",
+        mcp_code_generator=_generate_create_user_mcp_code,
     )
 
 
@@ -1911,6 +1969,7 @@ def handle_create_viewpolicy_command(args):
         func=_execute,
         args=args,
         command_name="create-viewpolicy",
+        mcp_code_generator=_generate_create_viewpolicy_mcp_code,
     )
 
 
@@ -1929,6 +1988,7 @@ def handle_create_s3_key_command(args):
         func=_execute,
         args=args,
         command_name="create-s3-key",
+        mcp_code_generator=_generate_create_s3_key_mcp_code,
     )
 
 
@@ -3252,8 +3312,10 @@ def main():
         args = main_parser.parse_args()
     
     # Handle commands that don't require config
+    # --mcp only prints MCP function source and must not require a cluster config.
     no_config_commands = ['setup', 'mcp', 'gencert', 'list', '--help', '-h', '--version', '-v']
-    if args.command not in no_config_commands:
+    skipping_via_mcp = getattr(args, 'mcp', False) and args.command in ('create', 'delete')
+    if args.command not in no_config_commands and not skipping_via_mcp:
         if not os.path.isfile(CONFIG_FILE):
             print(f"Config file {CONFIG_FILE} not found. Please run 'vast-admin-mcp setup' first.", file=sys.stderr)
             sys.exit(1)

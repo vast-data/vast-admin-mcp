@@ -130,5 +130,29 @@ class TestS3KeyDeleteCmd(unittest.TestCase):
         self.assertIn('delete', wl['locals3keys'])
 
 
+class TestCreateS3KeyMcpFlag(unittest.TestCase):
+    def test_mcp_flag_prints_code_without_executing(self):
+        from types import SimpleNamespace
+        from vast_admin_mcp.cli import _cli_module as cli
+
+        args = SimpleNamespace(
+            cluster='dddd',
+            user='ffff',
+            tenant=None,
+            provider=None,
+            debug=False,
+            mcp=True,
+            format='table',
+            output=None,
+        )
+        with patch('vast_admin_mcp.create_functions.create_s3_key') as create_mock:
+            with patch('builtins.print') as print_mock:
+                cli.handle_create_s3_key_command(args)
+        create_mock.assert_not_called()
+        printed = ''.join(str(c.args[0]) for c in print_mock.call_args_list if c.args)
+        self.assertIn('create_s3_key_vast', printed)
+        self.assertIn('async def create_s3_key_mcp', printed)
+
+
 if __name__ == '__main__':
     unittest.main()
