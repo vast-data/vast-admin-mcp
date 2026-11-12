@@ -5,6 +5,7 @@ import numpy as np
 from pathlib import Path
 from typing import List, Optional, Dict, Any, Tuple
 import os
+import secrets
 import tempfile
 from datetime import datetime, timezone
 import time
@@ -13,6 +14,7 @@ import itertools
 import re
 import warnings
 
+from .request_auth import PerRequestAuthRequired, uses_per_request_auth
 from .config import (
     load_config, REST_PAGE_SIZE, PERFORMANCE_AGGREGATION_FUNCTION, TEMPLATE_MODIFICATIONS_FILE, get_default_template_path,
     MAX_VIEW_TIMEFRAME_SECONDS, METRICS_API_LIMIT,
@@ -2641,6 +2643,9 @@ def list_performance_graph(
         safe_cluster = cluster_name.replace('/', '_').replace('\\', '_')
         safe_monitor = monitor_name.replace('/', '_').replace('\\', '_').replace(' ', '_')
         filename = f"performance_graph_{safe_monitor}_{safe_cluster}_{timestamp_str}.png"
+        if uses_per_request_auth(cluster_config):
+            # Per-user credentials: callers can see different things, so the graph link must not be guessable.
+            filename = f"performance_graph_{safe_monitor}_{safe_cluster}_{timestamp_str}_{secrets.token_hex(8)}.png"
         file_path = os.path.join(GRAPH_TEMP_DIR, filename)
         
         # Create the graph
@@ -3263,6 +3268,7 @@ def list_dynamic(command_name: str, **kwargs) -> List[Dict]:
     
     # Cache for clients to reuse across cluster resolutions
     cluster_clients = {}  # cluster_address -> client (reuse clients)
+    per_request_auth_errors = []  # missing/refused per-user VAST tokens (per_request clusters only)
     
     for cluster_arg_item in cluster_list:
         # Use shared resolution function with client cache
@@ -3298,8 +3304,14 @@ def list_dynamic(command_name: str, **kwargs) -> List[Dict]:
             all_results.extend(results)
         except Exception as e:
             logging.error(f"Error executing dynamic command {command_name} on cluster {cluster_name}: {e}")
+            if isinstance(e, PerRequestAuthRequired):
+                per_request_auth_errors.append(e)
             # Continue with other clusters even if one fails
             continue
+
+    # Nothing came back and a per-user token was missing or refused: say so instead of an empty list.
+    if not all_results and per_request_auth_errors:
+        raise per_request_auth_errors[0]
     
     # Apply ordering and top limit to combined results from all clusters
     if all_results:

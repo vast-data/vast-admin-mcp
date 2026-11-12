@@ -18,6 +18,10 @@ All notable changes to this project will be documented in this file.
 
 - **Read-write tool exposure** -- Create and delete MCP tools are registered only when the server is started with `--read-write`. In readonly mode they are omitted from the tool list (previously always visible, failing at call time).
 
+### Added
+
+- **Per-user VAST credentials** -- opt-in per cluster with `"auth_method": "per_request"`. The cluster stores no credentials; each MCP HTTP request carries the caller's own VMS session token in `X-VAST-Bearer: <cluster>=<token>`, sent to VMS as `Authorization: Bearer`. VAST applies that user's roles and records their name. Clients are cached per token (separate `bearer_client` cache, 1 h), a missing or refused token fails the call with a clear error (never an empty list, never another login), and graphs from these clusters get unguessable file names. Clusters with stored credentials are unchanged and ignore the header. See README "Per-user VAST credentials".
+
 ### Fixed
 
 - **env: password references** -- `retrieve_password_secure` no longer raises `UnboundLocalError` on `os` when resolving `env:<VAR>` credentials. Redundant function-local `import os` in the keyring branch had shadowed the module-level name for the whole function, so Docker/`--env-file` and systemd setups using `"password": "env:…"` failed on every tool call. The same local-import shadowing is removed for `sys` in `handle_performance_graph_command` (missing `--monitor-name` now exits with code 1 instead of crashing) and for unused local `import json` in `start_mcp`.
