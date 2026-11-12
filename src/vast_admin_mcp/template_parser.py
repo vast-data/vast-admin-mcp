@@ -31,12 +31,15 @@ class TemplateParser:
         self.api_whitelist = {}
         # Load templates (includes variables, field_anchors, and list_cmds)
         self.templates = self._load_templates()
+        # Load delete command templates (delete_cmds section)
+        self.delete_templates = self._load_delete_templates()
         # Load API whitelist
         self.api_whitelist = self._load_api_whitelist()
         # Load merged commands (merged_list_cmds section)
         self.merged_commands = self._load_merged_commands()
         # Validate templates after loading
         self._validate_templates()
+        self._validate_delete_templates()
     
     def get_command_names(self) -> List[str]:
         """Get list of available command names (excludes YAML anchors starting with _)"""
@@ -236,6 +239,11 @@ class TemplateParser:
         default_cmds = default_data.get('list_cmds', {})
         user_cmds = user_data.get('list_cmds', {})
         merged['list_cmds'] = self._deep_merge_commands(default_cmds, user_cmds)
+
+        # delete_cmds: Deep merge (same pattern as list_cmds)
+        default_delete_cmds = default_data.get('delete_cmds', {})
+        user_delete_cmds = user_data.get('delete_cmds', {})
+        merged['delete_cmds'] = self._deep_merge_commands(default_delete_cmds, user_delete_cmds)
         
         # merged_list_cmds: Deep merge (same as list_cmds)
         default_merged = default_data.get('merged_list_cmds', [])
@@ -394,6 +402,21 @@ class TemplateParser:
         # Apply variable replacements to all string values in the templates
         templates = self._apply_replacements_recursive(templates)
         return templates
+
+    def _load_delete_templates(self) -> Dict:
+        """Load delete_cmds section from merged YAML data."""
+        if not self._merged_data:
+            return {}
+
+        if 'delete_cmds' not in self._merged_data:
+            return {}
+
+        templates = self._merged_data['delete_cmds']
+        if not isinstance(templates, dict):
+            logging.warning("'delete_cmds' section must be a dictionary, ignoring")
+            return {}
+
+        return self._apply_replacements_recursive(templates)
     
     def _load_api_whitelist(self) -> Dict[str, List[str]]:
         """Load api_whitelist section from merged YAML data
@@ -752,6 +775,44 @@ class TemplateParser:
                 if '{{$fields}}' not in description:
                     raise ValueError(f"{desc_path}: InvalidValue - Description must contain '{{$fields}}' placeholder")
     
+    def _validate_delete_templates(self):
+        """Validate delete_cmds structure (lighter than list_cmds)."""
+        for command_name, template in self.delete_templates.items():
+            if command_name.startswith('_'):
+                continue
+            base_path = f"delete_cmds.{command_name}"
+            if not isinstance(template, dict):
+                raise ValueError(f"{base_path}: InvalidType - Expected dictionary, got {type(template).__name__}")
+            if 'api_endpoint' not in template:
+                raise ValueError(f"{base_path}: MissingRequired - Missing required section 'api_endpoint'")
+            if not isinstance(template.get('api_endpoint'), str) or not template['api_endpoint'].strip():
+                raise ValueError(f"{base_path}.api_endpoint: InvalidValue - Must be a non-empty string")
+            if 'fields' not in template:
+                raise ValueError(f"{base_path}: MissingRequired - Missing required section 'fields'")
+            if not isinstance(template['fields'], list) or not template['fields']:
+                raise ValueError(f"{base_path}.fields: InvalidValue - Must be a non-empty list")
+            if 'description' not in template:
+                raise ValueError(f"{base_path}: MissingRequired - Missing required section 'description'")
+            description = template.get('description', '')
+            if not isinstance(description, str) or not description.strip():
+                raise ValueError(f"{base_path}.description: InvalidValue - Must be a non-empty string")
+            if '{{$arguments}}' not in description:
+                raise ValueError(f"{base_path}.description: InvalidValue - Description must contain '{{$arguments}}' placeholder")
+
+            for i, field in enumerate(template['fields']):
+                field_path = f"{base_path}.fields[{i}]"
+                if not isinstance(field, dict):
+                    raise ValueError(f"{field_path}: InvalidType - Expected dictionary")
+                if 'name' not in field:
+                    raise ValueError(f"{field_path}: MissingRequired - Field must have 'name' key")
+                if 'argument' in field:
+                    arg = field['argument']
+                    if not isinstance(arg, dict):
+                        raise ValueError(f"{field_path}.argument: InvalidType - Expected dictionary")
+                    arg_type = arg.get('type', 'str')
+                    if arg_type not in ['str', 'int', 'bool', 'list', 'capacity']:
+                        raise ValueError(f"{field_path}.argument.type: InvalidValue - Unsupported type '{arg_type}'")
+
     def get_template(self, command_name: str) -> Optional[Dict]:
         """Get template for a specific command"""
         return self.templates.get(command_name)
@@ -759,6 +820,89 @@ class TemplateParser:
     def get_all_commands(self) -> List[str]:
         """Get list of all commands defined in templates"""
         return list(self.templates.keys())
+
+    def get_delete_template(self, command_name: str) -> Optional[Dict]:
+        """Get template for a specific delete command"""
+        return self.delete_templates.get(command_name)
+
+    def get_all_delete_commands(self) -> List[str]:
+        """Get list of all delete commands defined in delete_cmds"""
+        return [name for name in self.delete_templates.keys() if not name.startswith('_')]
+
+    def get_delete_arguments(self, command_name: str) -> List[Dict]:
+        """Get CLI/MCP arguments for a delete command from fields with argument property"""
+        template = self.get_delete_template(command_name)
+        if not template:
+            return []
+
+        fields = template.get('fields', [])
+        normalized_args = []
+
+        for field in fields:
+            if isinstance(field, dict) and 'argument' in field:
+                arg_config = field['argument'].copy()
+                field_name = field.get('name') or field.get('header')
+                if not field_name:
+                    continue
+
+                arg_config['name'] = field_name
+                if 'field' in field:
+                    arg_config['_api_field'] = field['field']
+
+                if 'description' not in arg_config or not arg_config.get('description', '').strip():
+                    arg_config['description'] = self._generate_argument_description(
+                        command_name, field_name, arg_config, field
+                    )
+                else:
+                    aliases = arg_config.get('aliases', [])
+                    if aliases:
+                        aliases_str = ", ".join(aliases)
+                        existing_desc = arg_config.get('description', '')
+                        if 'Aliases:' not in existing_desc:
+                            arg_config['description'] = f"{existing_desc}. Aliases: {aliases_str}"
+
+                normalized_args.append(arg_config)
+
+        return normalized_args
+
+    def get_delete_description(self, command_name: str) -> str:
+        """Get delete command description with {{$arguments}} replaced."""
+        template = self.get_delete_template(command_name)
+        if not template:
+            return ""
+
+        description = template.get('description', '').strip()
+        if '{{$arguments}}' not in description:
+            return description
+
+        lines = description.split('\n')
+        base_indent = 0
+        for line in lines:
+            if '{{$arguments}}' in line:
+                base_indent = len(line) - len(line.lstrip(' '))
+                break
+
+        formatted_args = self._format_delete_arguments_for_mcp(command_name, base_indent)
+        for i, line in enumerate(lines):
+            if '{{$arguments}}' in line:
+                lines[i] = formatted_args
+        return '\n'.join(lines)
+
+    def _format_delete_arguments_for_mcp(self, command_name: str, base_indent: int = 0) -> str:
+        """Format delete command arguments for MCP tool descriptions."""
+        args = self.get_delete_arguments(command_name)
+        if not args:
+            return ' ' * base_indent + '(none)'
+
+        indent = ' ' * base_indent
+        lines = []
+        for arg in args:
+            name = arg.get('name', '')
+            desc = arg.get('description', '').strip() or name
+            mandatory = arg.get('mandatory', False)
+            req = 'required' if mandatory else 'optional'
+            lines.append(f"{indent}{name} ({req}): {desc}")
+        return '\n'.join(lines)
     
     def get_api_endpoints(self, command_name: str) -> List[str]:
         """Get list of API endpoints for a command"""

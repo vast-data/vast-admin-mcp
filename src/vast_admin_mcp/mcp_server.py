@@ -96,7 +96,8 @@ if True:  # Always import, but only register when read_write=True
     try:
         from .create_functions import (
             create_view, create_view_from_template, create_snapshot, create_clone, create_quota,
-            create_support_bundle
+            create_support_bundle, create_tenant, create_vippool, create_user, create_viewpolicy,
+            create_s3_key,
         )
         CREATE_FUNCTIONS_AVAILABLE = True
     except ImportError as e:
@@ -108,6 +109,19 @@ if True:  # Always import, but only register when read_write=True
         create_clone = None
         create_quota = None
         create_support_bundle = None
+        create_tenant = None
+        create_vippool = None
+        create_user = None
+        create_viewpolicy = None
+        create_s3_key = None
+
+try:
+    from .delete_functions import delete_dynamic
+    DELETE_FUNCTIONS_AVAILABLE = True
+except ImportError as e:
+    logging.warning(f"Delete functions not available: {e}")
+    DELETE_FUNCTIONS_AVAILABLE = False
+    delete_dynamic = None
 
 
 def create_auth_provider(auth_config: Optional[Dict[str, Any]] = None):
@@ -216,7 +230,7 @@ def start_mcp(
     """Start the MCP server with configurable transport and authentication.
     
     Args:
-        read_write: Enable read-write mode (create operations)
+        read_write: Enable read-write mode (register create/delete tools)
         transport: Transport protocol - 'stdio' or 'http'
         host: Bind address for HTTP transport (default: 127.0.0.1)
         port: Port for HTTP transport (default: 8000)
@@ -1480,9 +1494,9 @@ def start_mcp(
         except Exception as e:
             logging.warning(f"Could not load merged tools from template file {TEMPLATE_MODIFICATIONS_FILE}: {e}")
 
-    # Register create functions (always visible to LLM, but check read_write at runtime)
-    if CREATE_FUNCTIONS_AVAILABLE:
-        readonly_error_msg = "This operation is not available in readonly mode. The MCP server must be started with the --read-write flag to enable create operations. Please restart the MCP server using: vast-admin-mcp mcp --read-write"
+    # Register create tools only when --read-write is enabled (same gate as delete).
+    if CREATE_FUNCTIONS_AVAILABLE and read_write:
+        readonly_error_msg = "This operation is not available in readonly mode. The MCP server must be started with the --read-write flag to enable create/delete operations. Please restart the MCP server using: vast-admin-mcp mcp --read-write"
         
         @mcp.tool(name="create_view_vast", description="Create a new VAST view")
         async def create_view_mcp(
@@ -1496,6 +1510,8 @@ def start_mcp(
             policy: str = '',
             hard_quota: str = '',
             qos_policy: str = '',
+            kafka_vip_pools: str = '',
+            name: str = '',
         ):
             """
             Create a view in a VAST cluster. Provide cluster and path at minimum.
@@ -1504,13 +1520,15 @@ def start_mcp(
                 cluster: Cluster address or name. Required.
                 tenant: Tenant name that owns the view. Defaults to 'default' if not provided.
                 path: View path (e.g., /s3/mybucket, /nfs/myshare). Required.
-                protocols: Comma seperated list of protocols to enable (e.g., NFS,S3,SMB,ENDPOINT). if not specified, NFS will be used. when S3 or ENDPOINT is specified, bucket and bucket_owner must be provided. when SMB is specified, share must be provided. (protocols are case-insensitive)
+                protocols: Comma seperated list of protocols to enable (e.g., NFS,S3,SMB,ENDPOINT,DATABASE,KAFKA). if not specified, NFS will be used. when S3 or ENDPOINT is specified, bucket and bucket_owner must be provided. when SMB is specified, share must be provided. DATABASE requires S3. KAFKA requires kafka_vip_pools. (protocols are case-insensitive)
                 bucket: Bucket name for S3 protocol. Must be provided if S3 or ENDPOINT protocol is requested.
                 bucket_owner: Bucket owner name for S3 protocol. Must be provided if S3 or ENDPOINT protocol is enabled.
                 share: Share name for NFS/SMB protocol. Must be provided if SMB is in the protocols list.
                 policy: View policy name.
                 hard_quota: Hard quota for the view (e.g., 10GB, 100GB, 1TB).
                 qos_policy: QoS policy name that can help manage performance for the view.
+                kafka_vip_pools: Comma-separated VIP pool names or ids. Required when KAFKA is enabled.
+                name: Optional view name.
             Returns:
                 A list of client paths for the new view for the specified protocols. each item in the list will be a dictionary containing protocol and client path.
             """
@@ -1527,7 +1545,9 @@ def start_mcp(
                     share=share or None,
                     policy=policy or None,
                     hard_quota=hard_quota or None,
-                    qos_policy=qos_policy or None
+                    qos_policy=qos_policy or None,
+                    kafka_vip_pools=kafka_vip_pools or None,
+                    name=name or None,
                 )
                 return _make_result(paths)
             except Exception as e:
@@ -1805,7 +1825,324 @@ def start_mcp(
                 logging.error(f"Error creating support bundle: {e}")
                 raise
 
+        @mcp.tool(name="create_tenant_vast", description="Create a VAST tenant with client IP ranges")
+        async def create_tenant_mcp(
+            cluster: str,
+            name: str,
+            client_ip_ranges: str,
+        ):
+            """
+            Create a tenant on a VAST cluster.
+
+            Args:
+                cluster: Cluster address or name. Required.
+                name: Tenant name. Required.
+                client_ip_ranges: Comma-separated IP or start-end ranges
+                    (e.g. "10.0.0.1,10.0.0.10-10.0.0.20"). Required.
+            """
+            if not read_write:
+                raise ValueError(readonly_error_msg)
+            try:
+                result = create_tenant(
+                    cluster=cluster,
+                    name=name,
+                    client_ip_ranges=client_ip_ranges,
+                )
+                return _make_result(result)
+            except Exception as e:
+                logging.error(f"Error creating tenant: {e}")
+                raise
+
+        @mcp.tool(name="create_vippool_vast", description="Create a VAST VIP pool (supports tenantless pools)")
+        async def create_vippool_mcp(
+            cluster: str,
+            name: str,
+            ip_ranges: str,
+            tenant: str = '',
+            role: str = 'PROTOCOLS',
+            subnet_cidr: int = 16,
+            vlan: int = 0,
+            gw_ip: str = '',
+            port_membership: str = 'ALL',
+            cnode_ids: str = '',
+            enabled: bool = True,
+        ):
+            """
+            Create a VIP pool. Always sends tenant_id explicitly.
+
+            Args:
+                cluster: Cluster address or name. Required.
+                name: VIP pool name. Required.
+                ip_ranges: Comma-separated IP or start-end ranges. Required.
+                tenant: Tenant name, or empty/none/null for a tenantless shared pool.
+                    Omitting tenant_id on VMS silently binds to default — this tool always
+                    sends an explicit tenant_id (including null for tenantless).
+                role: Pool role. Defaults to PROTOCOLS.
+                subnet_cidr: Subnet CIDR prefix length. Defaults to 16.
+                vlan: VLAN id. Defaults to 0.
+                gw_ip: Gateway IP. Defaults to empty.
+                port_membership: Port membership. Defaults to ALL.
+                cnode_ids: Optional comma-separated cnode names or ids.
+                enabled: Whether the pool is enabled. Defaults to True.
+            """
+            if not read_write:
+                raise ValueError(readonly_error_msg)
+            try:
+                result = create_vippool(
+                    cluster=cluster,
+                    name=name,
+                    ip_ranges=ip_ranges,
+                    tenant=tenant or None,
+                    role=role or 'PROTOCOLS',
+                    subnet_cidr=subnet_cidr,
+                    vlan=vlan,
+                    gw_ip=gw_ip or '',
+                    port_membership=port_membership or 'ALL',
+                    cnode_ids=cnode_ids or None,
+                    enabled=enabled,
+                )
+                return _make_result(result)
+            except Exception as e:
+                logging.error(f"Error creating vippool: {e}")
+                raise
+
+        @mcp.tool(name="create_user_vast", description="Create a local VAST user")
+        async def create_user_mcp(
+            cluster: str,
+            name: str,
+            uid: int,
+            local_provider: str = '1',
+        ):
+            """
+            Create a local user. Users have no tenant field; scope comes from the local provider.
+
+            Args:
+                cluster: Cluster address or name. Required.
+                name: User name. Required.
+                uid: Numeric user id. Required.
+                local_provider: Local provider name or id. Defaults to 1.
+            """
+            if not read_write:
+                raise ValueError(readonly_error_msg)
+            try:
+                result = create_user(
+                    cluster=cluster,
+                    name=name,
+                    uid=uid,
+                    local_provider=local_provider or '1',
+                )
+                return _make_result(result)
+            except Exception as e:
+                logging.error(f"Error creating user: {e}")
+                raise
+
+        @mcp.tool(name="create_viewpolicy_vast", description="Create a VAST view policy")
+        async def create_viewpolicy_mcp(
+            cluster: str,
+            name: str,
+            tenant: str,
+            flavor: str = 'S3_NATIVE',
+            auth_source: str = 'PROVIDERS',
+            access_flavor: str = 'ALL',
+            path_length: str = 'LCD',
+            allowed_characters: str = 'LCD',
+            nfs_read_write: str = '*',
+            s3_read_write: str = '*',
+        ):
+            """
+            Create a view policy for a tenant.
+
+            Args:
+                cluster: Cluster address or name. Required.
+                name: View policy name. Required.
+                tenant: Tenant name. Required.
+                flavor: Policy flavor. Defaults to S3_NATIVE.
+                auth_source: Auth source. Defaults to PROVIDERS.
+                access_flavor: Access flavor. Defaults to ALL.
+                path_length: Path length mode. Defaults to LCD.
+                allowed_characters: Allowed characters mode. Defaults to LCD.
+                nfs_read_write: Comma-separated NFS RW hosts. Defaults to *.
+                s3_read_write: Comma-separated S3 RW principals. Defaults to *.
+            """
+            if not read_write:
+                raise ValueError(readonly_error_msg)
+            try:
+                result = create_viewpolicy(
+                    cluster=cluster,
+                    name=name,
+                    tenant=tenant,
+                    flavor=flavor or 'S3_NATIVE',
+                    auth_source=auth_source or 'PROVIDERS',
+                    access_flavor=access_flavor or 'ALL',
+                    path_length=path_length or 'LCD',
+                    allowed_characters=allowed_characters or 'LCD',
+                    nfs_read_write=nfs_read_write or '*',
+                    s3_read_write=s3_read_write or '*',
+                )
+                return _make_result(result)
+            except Exception as e:
+                logging.error(f"Error creating view policy: {e}")
+                raise
+
+        @mcp.tool(name="create_s3_key_vast", description="Create a local S3 access key for a VAST user")
+        async def create_s3_key_mcp(
+            cluster: str,
+            user: str,
+            tenant: str = '',
+            provider: str = '',
+        ):
+            """
+            Create a local S3 access key for a user.
+
+            Locates the user with query_users (tenant-scoped), rejects creation when the user
+            already has 2 local S3 keys, then POSTs to users/{id}/access_keys/.
+
+            Args:
+                cluster: Cluster address or name. Required.
+                user: User name / login name. Required.
+                tenant: Tenant name. Optional; defaults to 'default' (noted in the output).
+                provider: Local provider name or id. Optional; when omitted, uses the local
+                    provider assigned to the tenant.
+            Returns:
+                Access key, secret key, and user/tenant/provider details.
+            """
+            if not read_write:
+                raise ValueError(readonly_error_msg)
+            try:
+                result = create_s3_key(
+                    cluster=cluster,
+                    user=user,
+                    tenant=tenant or None,
+                    provider=provider or None,
+                )
+                return _make_result(result)
+            except Exception as e:
+                logging.error(f"Error creating S3 key: {e}")
+                raise
+
         logging.info("Registered create tools (available in read-write mode only)")
+    elif CREATE_FUNCTIONS_AVAILABLE:
+        logging.info("Skipping create tools (readonly mode; pass --read-write to expose them)")
+
+    # Register YAML-driven delete tools from delete_cmds (read-write only).
+    if DELETE_FUNCTIONS_AVAILABLE and read_write:
+        delete_readonly_error_msg = (
+            "This operation is not available in readonly mode. The MCP server must be started "
+            "with the --read-write flag to enable delete operations. Please restart the MCP server "
+            "using: vast-admin-mcp mcp --read-write"
+        )
+        default_template_path = get_default_template_path()
+        if os.path.exists(TEMPLATE_MODIFICATIONS_FILE) or default_template_path:
+            try:
+                delete_parser = TemplateParser(
+                    TEMPLATE_MODIFICATIONS_FILE,
+                    default_template_path=default_template_path,
+                )
+                for command_name in delete_parser.get_all_delete_commands():
+                    try:
+                        template = delete_parser.get_delete_template(command_name)
+                        if not template:
+                            continue
+                        if not template.get('create_mcp_tool', True):
+                            continue
+
+                        description = delete_parser.get_delete_description(command_name) or (
+                            f"Delete {command_name} from a VAST cluster"
+                        )
+                        args_config = delete_parser.get_delete_arguments(command_name)
+                        sanitized_command_name = command_name.replace('-', '_').replace(' ', '_')
+                        tool_name = f"delete_{sanitized_command_name}_vast"
+
+                        param_defs = []
+                        param_names = []
+                        arg_name_mapping = {}
+                        for arg in args_config:
+                            arg_name = arg.get('name')
+                            if not arg_name:
+                                continue
+                            python_param_name = arg_name.replace(' ', '_')
+                            arg_name_mapping[python_param_name] = arg_name
+                            param_names.append(python_param_name)
+                            arg_type = arg.get('type', 'str')
+                            arg_mandatory = arg.get('mandatory', False)
+                            if arg_type == 'list' and arg.get('argument_list', False):
+                                arg_type_for_sig = 'str'
+                            else:
+                                arg_type_for_sig = arg_type
+
+                            if arg_mandatory:
+                                if arg_type_for_sig == 'int':
+                                    param_defs.append(f"{python_param_name}: int")
+                                elif arg_type_for_sig == 'bool':
+                                    param_defs.append(f"{python_param_name}: bool")
+                                else:
+                                    param_defs.append(f"{python_param_name}: str")
+                            else:
+                                if arg_type_for_sig == 'int':
+                                    param_defs.append(f"{python_param_name}: int = 0")
+                                elif arg_type_for_sig == 'bool':
+                                    param_defs.append(f"{python_param_name}: bool = False")
+                                else:
+                                    param_defs.append(f"{python_param_name}: str = ''")
+
+                        kwargs_build = ['    kwargs = {}']
+                        for arg in args_config:
+                            arg_name = arg.get('name')
+                            if not arg_name:
+                                continue
+                            python_param_name = arg_name.replace(' ', '_')
+                            arg_type = arg.get('type', 'str')
+                            if arg_type == 'bool':
+                                kwargs_build.append(f"    kwargs['{arg_name}'] = {python_param_name}")
+                            elif arg_type == 'int':
+                                kwargs_build.append(
+                                    f"    if {python_param_name} is not None:\n"
+                                    f"        kwargs['{arg_name}'] = {python_param_name}"
+                                )
+                            else:
+                                kwargs_build.append(
+                                    f"    if {python_param_name} is not None and str({python_param_name}).strip() != '':\n"
+                                    f"        kwargs['{arg_name}'] = {python_param_name}"
+                                )
+
+                        escaped_docstring = description.replace('\\', '\\\\').replace('{', '{{').replace('}', '}}')
+                        func_params = ', '.join(param_defs) if param_defs else ''
+                        func_code = f"""async def {tool_name}_func({func_params}):
+    \"\"\"{escaped_docstring}\"\"\"
+    if not read_write:
+        raise ValueError(delete_readonly_error_msg)
+{chr(10).join(kwargs_build)}
+    try:
+        result = delete_dynamic('{command_name}', **kwargs)
+        return _make_result(result)
+    except Exception as e:
+        import logging
+        logging.error(f"Error deleting {command_name}: {{e}}")
+        raise
+"""
+                        exec_namespace = {
+                            'List': List,
+                            'Dict': Dict,
+                            'logging': logging,
+                            '_make_result': _make_result,
+                            'read_write': read_write,
+                            'delete_readonly_error_msg': delete_readonly_error_msg,
+                            'delete_dynamic': delete_dynamic,
+                        }
+                        exec(func_code, exec_namespace)
+                        tool_func = exec_namespace[f'{tool_name}_func']
+                        mcp.tool(name=tool_name, description=description)(tool_func)
+                        logging.info(f"Registered dynamic delete tool: {tool_name}")
+                    except Exception as e:
+                        logging.warning(
+                            f"Could not register delete tool for '{command_name}': {e}"
+                        )
+                        import traceback
+                        logging.debug(f"Traceback for delete {command_name}: {traceback.format_exc()}")
+            except Exception as e:
+                logging.warning(f"Could not load delete_cmds for MCP registration: {e}")
+    elif DELETE_FUNCTIONS_AVAILABLE:
+        logging.info("Skipping delete tools (readonly mode; pass --read-write to expose them)")
 
     # Run the server with appropriate transport
     if transport == "stdio":

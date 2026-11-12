@@ -2,7 +2,21 @@
 
 All notable changes to this project will be documented in this file.
 
-## [Unreleased]
+## [0.2.8]
+
+### Added
+
+- `list_views_vast` protocol filter via server-side `protocols__contains` (never silently-ignored `protocols=`)
+- `list_tenants_vast` now exposes `client_ip_ranges` and `client_ip_ranges_summary`
+- New create tools (require `--read-write`): `create_tenant_vast`, `create_vippool_vast`, `create_user_vast`, `create_viewpolicy_vast`, `create_s3_key_vast`
+- `create_view_vast` extended for `DATABASE`/`KAFKA` (DATABASE requires S3; KAFKA requires `kafka_vip_pools`)
+- `create_s3_key_vast` locates users via `query_users`, enforces max 2 local keys, and POSTs `users/{id}/access_keys/`
+- New YAML-driven `delete_cmds` section auto-registers `delete_vippools_vast`, `delete_users_vast`, `delete_viewpolicies_vast`, `delete_views_vast`, `delete_s3_keys_vast` (tenant delete intentionally omitted)
+- VIP pool create always sends explicit `tenant_id`, including JSON `null` for tenantless/shared pools
+
+### Changed
+
+- **Read-write tool exposure** -- Create and delete MCP tools are registered only when the server is started with `--read-write`. In readonly mode they are omitted from the tool list (previously always visible, failing at call time).
 
 ### Fixed
 

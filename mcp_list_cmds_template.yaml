@@ -5,6 +5,8 @@
 #   - variables: String replacements for use in descriptions ({{placeholder_name}})
 #   - field_anchors: Reusable field definitions using YAML anchors
 #   - list_cmds: Command definitions for dynamic list tools
+#   - delete_cmds: Command definitions for dynamic delete tools (delete_<name>_vast)
+#   - merged_list_cmds: Combined list tools
 
 # ============================================================================
 # API Whitelist Section
@@ -26,7 +28,7 @@
 api_whitelist:
   # Core cluster endpoints
   - clusters
-  - tenants
+  - tenants: [post]  # GET + POST for create; delete intentionally not allowed
   - cnodes
   - dnodes
   - eboxes
@@ -35,15 +37,15 @@ api_whitelist:
 
   
   # Storage endpoints when empty list of methods, it allows only GET method by default
-  - views: [post]  # GET + POST for create operations
+  - views: [post, delete]  # GET + POST + DELETE for create/delete operations
   - volumes
   - snapshots: [post]  # GET + POST for create operations
   - quotas: [post, patch]  # GET + POST + PATCH for create/update operations
-  - vippools
+  - vippools: [post, delete]  # GET + POST + DELETE for create/delete operations
   - dns
   
   # Policy and protection endpoints
-  - viewpolicies
+  - viewpolicies: [post, delete]  # GET + POST + DELETE for create/delete operations
   - protectionpolicies
   - protectedpaths
   - alarms
@@ -63,9 +65,9 @@ api_whitelist:
   # directory and identity endpoints
   - activedirectory
   - localproviders
-  - users
+  - users: [post, delete]  # GET + POST + DELETE for create/delete operations (POST also covers users/{id}/access_keys)
   - s3policies
-  - locals3keys
+  - locals3keys: [delete]  # GET + DELETE for S3 access key removal
 
   # System endpoints (for setup/validation)
   - login
@@ -184,6 +186,20 @@ list_cmds:
       # Transform protocols list to comma-separated string using jq - useful for fields that contain objects (and not strings)
       - name: protocols
         jq: join(\",\")
+      # Server-side protocol membership filter (protocols__contains). Do NOT filter the
+      # display protocols field with type:list — that would send silently-ignored protocols=.
+      - name: protocol
+        field: protocols__contains
+        hide: true
+        argument:
+          type: str
+          mandatory: false
+          filter: true
+          description: >-
+            Filter views that include this protocol (API: protocols__contains).
+            Exact values such as NFS, NFS4, S3, SMB, ENDPOINT, DATABASE, KAFKA, BLOCK.
+          aliases:
+          - protocols
       # Convert capacity from bytes to requested unit (KB|MB|GB|TB|AUTO)
       # AUTO selects best fit unit automatically
       - name: logical used
@@ -411,6 +427,13 @@ list_cmds:
           aliases:
           - vip_pools
           - vip_pool_names
+
+      - name: client ip ranges
+        field: client_ip_ranges
+        jq: 'map(join("-")) | join(",")'
+
+      - name: client ip ranges summary
+        field: client_ip_ranges_summary
       
       # Per-row endpoint data is accessed using endpoint.field syntax (e.g., capacity.root_data)
       - name: usable capacity
@@ -442,7 +465,8 @@ list_cmds:
         A list of tenants. Each item in the list will be a dictionary containing general information regarding a specific tenant.
         The output inlcudes information about Usable Capacity (The amount of occupied by data written by the user after data reduction applied), 
         Unique Capacity (The amount of data that will be freed if the tenants data will be deleted), 
-        and Logical Capacity (The amount of occupied by data written by the user before data reduction applied).        
+        and Logical Capacity (The amount of occupied by data written by the user before data reduction applied).
+        Also includes client_ip_ranges and client_ip_ranges_summary when present on the tenant.
       Fields:
         {{$fields}}
 
@@ -1552,6 +1576,162 @@ list_cmds:
       Fields:
         {{$fields}}
       {{prefer_tables}}
+
+# ============================================================================
+# Delete Commands Section
+# ============================================================================
+# YAML-driven delete tools. Each entry auto-registers delete_<name>_vast (requires --read-write).
+# Expansion: add an entry here + whitelist delete on the endpoint; no Python needed for
+# standard name/path/tenant lookup deletes. Tenants are intentionally omitted (create-only).
+delete_cmds:
+  vippools:
+    api_endpoint: vippools
+    description: |-
+      Delete a VIP pool by name. Requires --read-write.
+      {{cluster_warning}}
+      Args:
+        {{$arguments}}
+      Returns:
+        A short confirmation that the VIP pool was deleted.
+    fields:
+      - name: cluster
+        argument:
+          type: str
+          mandatory: true
+          description: Target cluster name or address.
+          aliases:
+          - clusters
+      - name: name
+        field: name
+        argument:
+          type: str
+          mandatory: true
+          filter: true
+          description: VIP pool name to delete.
+
+  users:
+    api_endpoint: users
+    description: |-
+      Delete a local user by name. Requires --read-write.
+      {{cluster_warning}}
+      Args:
+        {{$arguments}}
+      Returns:
+        A short confirmation that the user was deleted.
+    fields:
+      - name: cluster
+        argument:
+          type: str
+          mandatory: true
+          description: Target cluster name or address.
+          aliases:
+          - clusters
+      - name: name
+        field: name
+        argument:
+          type: str
+          mandatory: true
+          filter: true
+          description: User name to delete.
+
+  viewpolicies:
+    api_endpoint: viewpolicies
+    description: |-
+      Delete a view policy by name and tenant. Requires --read-write.
+      {{cluster_warning}}
+      Args:
+        {{$arguments}}
+      Returns:
+        A short confirmation that the view policy was deleted.
+    fields:
+      - name: cluster
+        argument:
+          type: str
+          mandatory: true
+          description: Target cluster name or address.
+          aliases:
+          - clusters
+      - name: tenant
+        field: tenant_name
+        argument:
+          type: str
+          mandatory: true
+          filter: true
+          description: Tenant that owns the view policy.
+          aliases:
+          - tenant_name
+      - name: name
+        field: name
+        argument:
+          type: str
+          mandatory: true
+          filter: true
+          description: View policy name to delete.
+
+  views:
+    api_endpoint: views
+    description: |-
+      Delete a view by path and tenant. Requires --read-write.
+      {{cluster_warning}}
+      Args:
+        {{$arguments}}
+      Returns:
+        A short confirmation that the view was deleted.
+    fields:
+      - name: cluster
+        argument:
+          type: str
+          mandatory: true
+          description: Target cluster name or address.
+          aliases:
+          - clusters
+      - name: tenant
+        field: tenant_name
+        argument:
+          type: str
+          mandatory: true
+          filter: true
+          description: Tenant that owns the view.
+          aliases:
+          - tenant_name
+      - name: path
+        field: path
+        argument:
+          type: str
+          mandatory: true
+          filter: true
+          description: View path to delete.
+
+  s3_keys:
+    api_endpoint: locals3keys
+    description: |-
+      Delete a local S3 access key by access key id string. Requires --read-write.
+      {{cluster_warning}}
+      Args:
+        {{$arguments}}
+      Returns:
+        A short confirmation that the S3 access key was deleted.
+    fields:
+      - name: cluster
+        argument:
+          type: str
+          mandatory: true
+          description: Target cluster name or address.
+          aliases:
+          - clusters
+      - name: access key
+        field: access_key
+        argument:
+          type: str
+          mandatory: true
+          filter: true
+          description: S3 access key string to delete.
+          aliases:
+          - access_key
+          - key
+          - s3_key
+          - s3_access_key
+
 # Merged list commands section
 merged_list_cmds:
   # Hardware topology command - list hardware topology of cnodes and dnodes from VAST cluster(s) 

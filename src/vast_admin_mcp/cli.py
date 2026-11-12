@@ -12,7 +12,12 @@ from .setup import setup_config
 from .utils import output_results, logging_main, to_cli_name, handle_errors
 from .template_parser import TemplateParser
 from .functions import list_dynamic, list_merged, list_clusters, list_performance, list_performance_graph, list_monitors, list_view_instances, list_fields, describe_tool, query_users, list_dataflow
-from .create_functions import create_view, create_view_from_template, create_snapshot, create_clone, create_quota, create_support_bundle
+from .create_functions import (
+    create_view, create_view_from_template, create_snapshot, create_clone, create_quota,
+    create_support_bundle, create_tenant, create_vippool, create_user, create_viewpolicy,
+    create_s3_key,
+)
+from .delete_functions import delete_dynamic
 
 
 def create_list_parser():
@@ -1650,7 +1655,9 @@ def handle_create_view_command(args):
             'share': args.share,
             'policy': args.policy,
             'hard_quota': getattr(args, 'hard_quota', None),
-            'qos_policy': getattr(args, 'qos_policy', None)
+            'qos_policy': getattr(args, 'qos_policy', None),
+            'kafka_vip_pools': getattr(args, 'kafka_vip_pools', None),
+            'name': getattr(args, 'name', None),
         }
     
     _handle_command_execution(
@@ -1820,6 +1827,135 @@ def handle_create_support_bundle_command(args):
         args=args,
         command_name="create-support_bundles",
         mcp_code_generator=_generate_create_support_bundle_mcp_code
+    )
+
+
+def handle_create_tenant_command(args):
+    """Handle create tenant command"""
+    def _execute():
+        result = create_tenant(
+            cluster=args.cluster,
+            name=args.name,
+            client_ip_ranges=args.client_ip_ranges,
+        )
+        return [result]
+
+    _handle_command_execution(
+        func=_execute,
+        args=args,
+        command_name="create-tenant",
+    )
+
+
+def handle_create_vippool_command(args):
+    """Handle create vippool command"""
+    def _execute():
+        result = create_vippool(
+            cluster=args.cluster,
+            name=args.name,
+            ip_ranges=args.ip_ranges,
+            tenant=getattr(args, 'tenant', None),
+            role=getattr(args, 'role', 'PROTOCOLS') or 'PROTOCOLS',
+            subnet_cidr=getattr(args, 'subnet_cidr', 16),
+            vlan=getattr(args, 'vlan', 0),
+            gw_ip=getattr(args, 'gw_ip', '') or '',
+            port_membership=getattr(args, 'port_membership', 'ALL') or 'ALL',
+            cnode_ids=getattr(args, 'cnode_ids', None),
+            enabled=not getattr(args, 'disabled', False),
+        )
+        return [result]
+
+    _handle_command_execution(
+        func=_execute,
+        args=args,
+        command_name="create-vippool",
+    )
+
+
+def handle_create_user_command(args):
+    """Handle create user command"""
+    def _execute():
+        result = create_user(
+            cluster=args.cluster,
+            name=args.name,
+            uid=args.uid,
+            local_provider=getattr(args, 'local_provider', '1'),
+        )
+        return [result]
+
+    _handle_command_execution(
+        func=_execute,
+        args=args,
+        command_name="create-user",
+    )
+
+
+def handle_create_viewpolicy_command(args):
+    """Handle create viewpolicy command"""
+    def _execute():
+        result = create_viewpolicy(
+            cluster=args.cluster,
+            name=args.name,
+            tenant=args.tenant,
+            flavor=getattr(args, 'flavor', 'S3_NATIVE') or 'S3_NATIVE',
+            auth_source=getattr(args, 'auth_source', 'PROVIDERS') or 'PROVIDERS',
+            access_flavor=getattr(args, 'access_flavor', 'ALL') or 'ALL',
+            path_length=getattr(args, 'path_length', 'LCD') or 'LCD',
+            allowed_characters=getattr(args, 'allowed_characters', 'LCD') or 'LCD',
+            nfs_read_write=getattr(args, 'nfs_read_write', '*') or '*',
+            s3_read_write=getattr(args, 's3_read_write', '*') or '*',
+        )
+        return [result]
+
+    _handle_command_execution(
+        func=_execute,
+        args=args,
+        command_name="create-viewpolicy",
+    )
+
+
+def handle_create_s3_key_command(args):
+    """Handle create s3-key command"""
+    def _execute():
+        result = create_s3_key(
+            cluster=args.cluster,
+            user=args.user,
+            tenant=getattr(args, 'tenant', None) or None,
+            provider=getattr(args, 'provider', None) or None,
+        )
+        return [result]
+
+    _handle_command_execution(
+        func=_execute,
+        args=args,
+        command_name="create-s3-key",
+    )
+
+
+def handle_delete_command(args):
+    """Handle YAML-driven delete command"""
+    command_name = getattr(args, 'delete_command', None)
+    if not command_name:
+        raise ValueError("delete command name is required")
+
+    kwargs = {'cluster': args.cluster}
+    for key, value in vars(args).items():
+        if key in ('command', 'delete_command', 'cluster', 'format', 'output', 'debug', 'mcp'):
+            continue
+        if value is None:
+            continue
+        if isinstance(value, str) and not value.strip():
+            continue
+        kwargs[key] = value
+
+    def _execute():
+        result = delete_dynamic(command_name, **kwargs)
+        return [{'Result': result}]
+
+    _handle_command_execution(
+        func=_execute,
+        args=args,
+        command_name=f"delete-{command_name}",
     )
 
 
@@ -2100,7 +2236,7 @@ def main():
     mcp_parser.add_argument(
         '--read-write',
         action='store_true',
-        help='Enable read-write mode (create commands). Default is readonly mode (list only)'
+        help='Enable read-write mode (expose create/delete MCP tools). Default is readonly mode (list only)'
     )
     mcp_parser.add_argument(
         '--debug', '-d',
@@ -2611,6 +2747,14 @@ def main():
         help='QoS policy name'
     )
     create_view_parser.add_argument(
+        '--kafka-vip-pools',
+        help='Comma-separated VIP pool names or ids (required for KAFKA protocol)'
+    )
+    create_view_parser.add_argument(
+        '--name',
+        help='Optional view name'
+    )
+    create_view_parser.add_argument(
         '--format', '-f',
         choices=['table', 'json', 'csv'],
         default='table',
@@ -2939,6 +3083,132 @@ def main():
         help='Show MCP tool structure and debugging information instead of executing the command'
     )
 
+    # Create tenant command
+    create_tenant_parser = create_subparsers.add_parser('tenant', help='Create a VAST tenant with client IP ranges')
+    create_tenant_parser.add_argument('--cluster', '-c', required=True, help='Target cluster address or name')
+    create_tenant_parser.add_argument('--name', required=True, help='Tenant name')
+    create_tenant_parser.add_argument(
+        '--client-ip-ranges',
+        required=True,
+        help='Comma-separated IP or start-end ranges (e.g. "10.0.0.1,10.0.0.10-10.0.0.20")',
+    )
+    create_tenant_parser.add_argument('--format', '-f', choices=['table', 'json', 'csv'], default='table')
+    create_tenant_parser.add_argument('--output', '-o', help='Output file path (optional)')
+    create_tenant_parser.add_argument('--debug', '-d', action='store_true')
+    create_tenant_parser.add_argument('--mcp', action='store_true')
+
+    # Create vippool command
+    create_vippool_parser = create_subparsers.add_parser('vippool', help='Create a VAST VIP pool')
+    create_vippool_parser.add_argument('--cluster', '-c', required=True, help='Target cluster address or name')
+    create_vippool_parser.add_argument('--name', required=True, help='VIP pool name')
+    create_vippool_parser.add_argument(
+        '--ip-ranges',
+        required=True,
+        help='Comma-separated IP or start-end ranges',
+    )
+    create_vippool_parser.add_argument(
+        '--tenant',
+        default='',
+        help='Tenant name, or empty/none for a tenantless shared pool',
+    )
+    create_vippool_parser.add_argument('--role', default='PROTOCOLS', help='VIP pool role (default: PROTOCOLS)')
+    create_vippool_parser.add_argument('--subnet-cidr', type=int, default=16, help='Subnet CIDR (default: 16)')
+    create_vippool_parser.add_argument('--vlan', type=int, default=0, help='VLAN id (default: 0)')
+    create_vippool_parser.add_argument('--gw-ip', default='', help='Gateway IP')
+    create_vippool_parser.add_argument('--port-membership', default='ALL', help='Port membership (default: ALL)')
+    create_vippool_parser.add_argument('--cnode-ids', help='Comma-separated cnode names or ids')
+    create_vippool_parser.add_argument('--disabled', action='store_true', help='Create pool as disabled')
+    create_vippool_parser.add_argument('--format', '-f', choices=['table', 'json', 'csv'], default='table')
+    create_vippool_parser.add_argument('--output', '-o', help='Output file path (optional)')
+    create_vippool_parser.add_argument('--debug', '-d', action='store_true')
+    create_vippool_parser.add_argument('--mcp', action='store_true')
+
+    # Create user command
+    create_user_parser = create_subparsers.add_parser('user', help='Create a local VAST user')
+    create_user_parser.add_argument('--cluster', '-c', required=True, help='Target cluster address or name')
+    create_user_parser.add_argument('--name', required=True, help='User name')
+    create_user_parser.add_argument('--uid', type=int, required=True, help='Numeric user id')
+    create_user_parser.add_argument('--local-provider', default='1', help='Local provider name or id (default: 1)')
+    create_user_parser.add_argument('--format', '-f', choices=['table', 'json', 'csv'], default='table')
+    create_user_parser.add_argument('--output', '-o', help='Output file path (optional)')
+    create_user_parser.add_argument('--debug', '-d', action='store_true')
+    create_user_parser.add_argument('--mcp', action='store_true')
+
+    # Create viewpolicy command
+    create_viewpolicy_parser = create_subparsers.add_parser('viewpolicy', help='Create a VAST view policy')
+    create_viewpolicy_parser.add_argument('--cluster', '-c', required=True, help='Target cluster address or name')
+    create_viewpolicy_parser.add_argument('--name', required=True, help='View policy name')
+    create_viewpolicy_parser.add_argument('--tenant', '-t', required=True, help='Tenant name')
+    create_viewpolicy_parser.add_argument('--flavor', default='S3_NATIVE', help='Policy flavor (default: S3_NATIVE)')
+    create_viewpolicy_parser.add_argument('--auth-source', default='PROVIDERS', help='Auth source (default: PROVIDERS)')
+    create_viewpolicy_parser.add_argument('--access-flavor', default='ALL', help='Access flavor (default: ALL)')
+    create_viewpolicy_parser.add_argument('--path-length', default='LCD', help='Path length mode (default: LCD)')
+    create_viewpolicy_parser.add_argument('--allowed-characters', default='LCD', help='Allowed characters (default: LCD)')
+    create_viewpolicy_parser.add_argument('--nfs-read-write', default='*', help='NFS RW hosts (default: *)')
+    create_viewpolicy_parser.add_argument('--s3-read-write', default='*', help='S3 RW principals (default: *)')
+    create_viewpolicy_parser.add_argument('--format', '-f', choices=['table', 'json', 'csv'], default='table')
+    create_viewpolicy_parser.add_argument('--output', '-o', help='Output file path (optional)')
+    create_viewpolicy_parser.add_argument('--debug', '-d', action='store_true')
+    create_viewpolicy_parser.add_argument('--mcp', action='store_true')
+
+    # Create S3 key command
+    create_s3_key_parser = create_subparsers.add_parser('s3-key', help='Create a local S3 access key for a user')
+    create_s3_key_parser.add_argument('--cluster', '-c', required=True, help='Target cluster address or name')
+    create_s3_key_parser.add_argument('--user', '-u', required=True, help='User name / login name')
+    create_s3_key_parser.add_argument(
+        '--tenant', '-t',
+        default='',
+        help='Tenant name (optional; defaults to default and notes that in the output)',
+    )
+    create_s3_key_parser.add_argument(
+        '--provider',
+        default='',
+        help='Local provider name or id (optional; defaults to the provider assigned to the tenant)',
+    )
+    create_s3_key_parser.add_argument('--format', '-f', choices=['table', 'json', 'csv'], default='table')
+    create_s3_key_parser.add_argument('--output', '-o', help='Output file path (optional)')
+    create_s3_key_parser.add_argument('--debug', '-d', action='store_true')
+    create_s3_key_parser.add_argument('--mcp', action='store_true')
+
+    # Delete commands from delete_cmds YAML
+    delete_parser = subparsers.add_parser('delete', help='Delete resources in VAST cluster(s)')
+    delete_subparsers = delete_parser.add_subparsers(dest='delete_command', help='Delete commands')
+    try:
+        default_template_path = get_default_template_path()
+        delete_template_parser = TemplateParser(
+            TEMPLATE_MODIFICATIONS_FILE,
+            default_template_path=default_template_path,
+        )
+        for delete_cmd_name in delete_template_parser.get_all_delete_commands():
+            delete_cmd_parser = delete_subparsers.add_parser(
+                delete_cmd_name,
+                help=f'Delete {delete_cmd_name}',
+            )
+            for arg in delete_template_parser.get_delete_arguments(delete_cmd_name):
+                arg_name = arg.get('name')
+                if not arg_name:
+                    continue
+                cli_name = to_cli_name(arg_name)
+                arg_type = arg.get('type', 'str')
+                kwargs = {
+                    'help': arg.get('description', arg_name),
+                    'required': bool(arg.get('mandatory', False)),
+                }
+                if arg_type == 'int':
+                    kwargs['type'] = int
+                elif arg_type == 'bool':
+                    kwargs['action'] = 'store_true'
+                if arg_name == 'cluster':
+                    delete_cmd_parser.add_argument('--cluster', '-c', **kwargs)
+                else:
+                    delete_cmd_parser.add_argument(f'--{cli_name}', **kwargs)
+            delete_cmd_parser.add_argument('--format', '-f', choices=['table', 'json', 'csv'], default='table')
+            delete_cmd_parser.add_argument('--output', '-o', help='Output file path (optional)')
+            delete_cmd_parser.add_argument('--debug', '-d', action='store_true')
+            delete_cmd_parser.add_argument('--mcp', action='store_true')
+    except Exception as e:
+        logging.debug(f"Could not load delete_cmds for CLI registration: {e}")
+
     # Check for --mcp flag in create commands before parsing
     # If present, make required arguments optional so we can show MCP code
     if 'create' in sys.argv and '--mcp' in sys.argv:
@@ -2954,7 +3224,12 @@ def main():
                     'snapshot': create_snapshot_parser,
                     'clone': create_clone_parser,
                     'quota': create_quota_parser,
-                    'support_bundles': create_support_bundle_parser
+                    'support_bundles': create_support_bundle_parser,
+                    'tenant': create_tenant_parser,
+                    'vippool': create_vippool_parser,
+                    'user': create_user_parser,
+                    'viewpolicy': create_viewpolicy_parser,
+                    's3-key': create_s3_key_parser,
                 }
                 subparser = subparser_map.get(subcommand)
                 if subparser:
@@ -3200,10 +3475,25 @@ def main():
             handle_create_quota_command(args)
         elif args.create_command == 'support_bundles':
             handle_create_support_bundle_command(args)
+        elif args.create_command == 'tenant':
+            handle_create_tenant_command(args)
+        elif args.create_command == 'vippool':
+            handle_create_vippool_command(args)
+        elif args.create_command == 'user':
+            handle_create_user_command(args)
+        elif args.create_command == 'viewpolicy':
+            handle_create_viewpolicy_command(args)
+        elif args.create_command == 's3-key':
+            handle_create_s3_key_command(args)
         else:
             print(f"Unknown create command: {args.create_command}", file=sys.stderr)
             create_parser.print_help()
             sys.exit(1)
+    elif args.command == 'delete':
+        if not hasattr(args, 'delete_command') or args.delete_command is None:
+            delete_parser.print_help()
+            sys.exit(1)
+        handle_delete_command(args)
     elif args.command is None:
         main_parser.print_help()
         sys.exit(1)

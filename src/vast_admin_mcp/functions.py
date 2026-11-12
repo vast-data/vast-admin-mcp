@@ -1210,7 +1210,8 @@ def describe_tool(tool_name: str) -> Dict:
     try:
         from .create_functions import (
             create_view, create_view_from_template, create_snapshot,
-            create_clone, create_quota, create_support_bundle
+            create_clone, create_quota, create_support_bundle,
+            create_tenant, create_vippool, create_user, create_viewpolicy, create_s3_key,
         )
         tool_mappings.update({
             'create_view_vast': {
@@ -1236,13 +1237,46 @@ def describe_tool(tool_name: str) -> Dict:
             'create_support_bundle_vast': {
                 'type': 'create',
                 'function': create_support_bundle
-            }
+            },
+            'create_tenant_vast': {
+                'type': 'create',
+                'function': create_tenant
+            },
+            'create_vippool_vast': {
+                'type': 'create',
+                'function': create_vippool
+            },
+            'create_user_vast': {
+                'type': 'create',
+                'function': create_user
+            },
+            'create_viewpolicy_vast': {
+                'type': 'create',
+                'function': create_viewpolicy
+            },
+            'create_s3_key_vast': {
+                'type': 'create',
+                'function': create_s3_key
+            },
         })
     except ImportError:
         pass  # Create functions not available
+
+    # Add YAML-driven delete tools if available
+    try:
+        delete_parser = TemplateParser(TEMPLATE_MODIFICATIONS_FILE, default_template_path=get_default_template_path())
+        for delete_cmd in delete_parser.get_all_delete_commands():
+            sanitized = delete_cmd.replace('-', '_').replace(' ', '_')
+            tool_mappings[f'delete_{sanitized}_vast'] = {
+                'type': 'delete',
+                'command': delete_cmd,
+            }
+    except Exception:
+        pass
     
     if tool_name not in tool_mappings:
-        available_tools = ", ".join(tool_mappings.keys())
+        # Also allow discovering dynamic list tools by name pattern
+        available_tools = ", ".join(sorted(tool_mappings.keys()))
         raise ValueError(
             f"Tool '{tool_name}' not found. Available tools: {available_tools}"
         )
@@ -1439,7 +1473,8 @@ def describe_tool(tool_name: str) -> Dict:
         if tool_name == 'create_view_vast':
             examples = [
                 "create_view_vast(cluster='vast3115-var', tenant='default', path='/nfs/myshare')",
-                "create_view_vast(cluster='vast3115-var', path='/s3/mybucket', protocols='S3', bucket='mybucket', bucket_owner='user1')"
+                "create_view_vast(cluster='vast3115-var', path='/s3/mybucket', protocols='S3', bucket='mybucket', bucket_owner='user1')",
+                "create_view_vast(cluster='vast3115-var', tenant='t1', path='/t1-eb', protocols='S3,DATABASE,KAFKA', bucket='t1-eb', bucket_owner='t1-owner', kafka_vip_pools='eb-pool')",
             ]
         elif tool_name == 'create_snapshot_vast':
             examples = [
@@ -1454,6 +1489,19 @@ def describe_tool(tool_name: str) -> Dict:
             examples = [
                 "create_quota_vast(cluster='vast3115-var', path='/nfs/myshare', hard_limit='1TB', soft_limit='800GB')"
             ]
+        elif tool_name == 'create_tenant_vast':
+            examples = [
+                "create_tenant_vast(cluster='vast3115-var', name='t1', client_ip_ranges='10.0.0.1')"
+            ]
+        elif tool_name == 'create_vippool_vast':
+            examples = [
+                "create_vippool_vast(cluster='vast3115-var', name='eb-pool', ip_ranges='10.0.1.1-10.0.1.10', tenant='none')"
+            ]
+        elif tool_name == 'create_s3_key_vast':
+            examples = [
+                "create_s3_key_vast(cluster='vast3115-var', user='andy')",
+                "create_s3_key_vast(cluster='vast3115-var', user='andy', tenant='default', provider='default')",
+            ]
         else:
             examples = [f"{tool_name}(cluster='<cluster>', ...)"]
         
@@ -1461,7 +1509,40 @@ def describe_tool(tool_name: str) -> Dict:
         pitfalls = [
             "Cluster is required - use list_clusters_vast to discover available clusters",
             "These operations require read-write mode - ensure MCP server was started with --read-write flag",
-            "Tenant defaults to 'default' if not specified"
+            "Tenant defaults to 'default' if not specified",
+            "For Kafka views, DATABASE requires S3 and KAFKA requires kafka_vip_pools",
+            "For VIP pools, always pass tenant explicitly (use none/empty for tenantless); omitting tenant_id on VMS binds to default",
+            "Users may have at most 2 local S3 keys; delete one before creating another",
+        ]
+
+    elif tool_info['type'] == 'delete':
+        command_name = tool_info['command']
+        template_path = TEMPLATE_MODIFICATIONS_FILE
+        default_template_path = get_default_template_path()
+        parser = TemplateParser(template_path, default_template_path=default_template_path)
+        description = parser.get_delete_description(command_name) or f"Delete {command_name}"
+        args_config = parser.get_delete_arguments(command_name)
+        arguments = []
+        for arg in args_config:
+            arguments.append({
+                'name': arg.get('name', ''),
+                'type': arg.get('type', 'str'),
+                'required': arg.get('mandatory', False),
+                'default': None,
+                'description': arg.get('description', ''),
+                'aliases': arg.get('aliases', []),
+                'examples': [],
+                'accepted_formats': ['exact identity match'],
+            })
+        return_structure = {
+            'type': 'str',
+            'description': 'Confirmation string describing the deleted object',
+        }
+        examples = [f"{tool_name}(cluster='vast3115-var', ...)"]
+        pitfalls = [
+            "Requires --read-write mode",
+            "Identity filters must match exactly one object",
+            "Tenant delete is intentionally not available via MCP",
         ]
         
     else:

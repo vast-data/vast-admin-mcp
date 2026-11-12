@@ -598,13 +598,30 @@ Additional list tools are automatically registered from the YAML template file l
 
 The following create tools are available when the MCP server is started with `--read-write`:
 
-- **create_view_vast**: Create a new VAST view
+- **create_view_vast**: Create a new VAST view (supports NFS/S3/SMB/ENDPOINT/DATABASE/KAFKA; Kafka needs `kafka_vip_pools`)
 - **create_view_from_template_vast**: Create views from a predefined template
 - **create_snapshot_vast**: Create a snapshot for a VAST view
 - **create_clone_vast**: Create a clone from a snapshot
 - **create_quota_vast**: Create or update quota for a specific path and tenant
+- **create_tenant_vast**: Create a tenant with `client_ip_ranges`
+- **create_vippool_vast**: Create a VIP pool (supports explicit tenantless pools)
+- **create_user_vast**: Create a local user
+- **create_viewpolicy_vast**: Create a view policy
+- **create_s3_key_vast**: Create a local S3 access key (uses `query_users`; max 2 keys per user)
 
-**Note**: Create tools are always registered (visible to LLMs) but will raise an error if called when the server is not in read-write mode.
+### Delete Tools
+
+YAML-driven delete tools from `delete_cmds` (also require `--read-write`):
+
+- **delete_vippools_vast**
+- **delete_users_vast**
+- **delete_viewpolicies_vast**
+- **delete_views_vast**
+- **delete_s3_keys_vast**
+
+Tenant delete is intentionally not exposed. Add more deletes by extending `delete_cmds` + `api_whitelist` (see [TEMPLATE_STRUCTURE.md](TEMPLATE_STRUCTURE.md)).
+
+**Note**: Create/delete tools are registered only when the MCP server is started with `--read-write`. In readonly mode they are not exposed to LLMs at all.
 
 ## Configuration
 
@@ -784,19 +801,17 @@ The server uses:
 - **command_executor**: Dynamic command execution
 - **jq**: System command-line tool for JSON transformations (required for jq expressions in YAML templates)
 
-## Create Functions
+## Create And Delete Functions
 
-The server includes create functions for creating VAST objects. These functions are available when the MCP server is started with the `--read-write` flag:
+Create and delete functions are available when the MCP server is started with the `--read-write` flag.
 
-- **create_view_vast**: Create a new VAST view
-- **create_view_from_template_vast**: Create views from a predefined template
-- **create_snapshot_vast**: Create a snapshot for a VAST view
-- **create_clone_vast**: Create a clone from a snapshot
-- **create_quota_vast**: Create or update quota for a specific path and tenant
+Create tools include views (including Kafka/DATABASE), view-from-template, snapshots, clones, quotas, tenants, VIP pools, users, view policies, and S3 access keys.
 
-**Important**: Create functions require the MCP server to be started with `--read-write` flag. If called in read-only mode, the LLM user will be notified that read-write mode is required.
+Delete tools are generated from the YAML `delete_cmds` section (`delete_vippools_vast`, `delete_users_vast`, `delete_viewpolicies_vast`, `delete_views_vast`, `delete_s3_keys_vast`). Tenant delete is not exposed.
 
-**Security**: All create functions use API whitelisting to ensure only allowed endpoints and HTTP methods can be accessed. See [API Whitelist](#api-whitelist) section for details.
+**Important**: These tools are only exposed when the MCP server is started with `--read-write`.
+
+**Security**: All create/delete functions use API whitelisting to ensure only allowed endpoints and HTTP methods can be accessed. See [API Whitelist](#api-whitelist) section for details.
 
 ## Community & Support
 

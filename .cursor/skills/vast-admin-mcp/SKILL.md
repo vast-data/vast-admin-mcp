@@ -9,7 +9,7 @@ description: Use VAST Admin MCP tools to inspect, monitor, and manage VAST Data 
 
 VAST Admin MCP is an MCP server for VAST Data administration. It exposes cluster inventory, monitoring, performance, dataflow, identity, storage, data protection, and optional create operations to agents.
 
-Default mode is read-only. Create/update operations require the MCP server to be started with `--read-write` and are still restricted by the API whitelist.
+Default mode is read-only. Create/delete tools are registered only when the MCP server is started with `--read-write`, and are still restricted by the API whitelist.
 
 ## First Steps
 
@@ -65,12 +65,20 @@ Dynamic list tools are generated from the YAML template and use the pattern `lis
 
 Read-write tools, available only when enabled:
 
-- `create_view_vast`: Create a VAST view.
+- `create_view_vast`: Create a VAST view (NFS/S3/SMB/ENDPOINT/DATABASE/KAFKA; Kafka needs `kafka_vip_pools`).
 - `create_view_from_template_vast`: Create views from a predefined template.
 - `create_snapshot_vast`: Create a view snapshot.
 - `create_clone_vast`: Create a clone from a snapshot.
 - `create_quota_vast`: Create or update a quota for a path and tenant.
 - `create_support_bundle_vast`: Create a diagnostic support bundle.
+- `create_tenant_vast`: Create a tenant with `client_ip_ranges`.
+- `create_vippool_vast`: Create a VIP pool; pass empty/`none` tenant for tenantless pools.
+- `create_user_vast`: Create a local user.
+- `create_viewpolicy_vast`: Create a view policy.
+- `create_s3_key_vast`: Create a local S3 access key via `query_users` lookup (max 2 keys/user).
+- YAML-driven deletes: `delete_vippools_vast`, `delete_users_vast`, `delete_viewpolicies_vast`, `delete_views_vast`, `delete_s3_keys_vast` (no tenant delete).
+
+For Event Broker setup: create tenant → tenantless vippool → user → view policy → Kafka view (`S3,DATABASE,KAFKA` + `kafka_vip_pools`). Filter Kafka views with `list_views_vast(protocol="KAFKA")`. Use `create_s3_key_vast` / `delete_s3_keys_vast` for local S3 keys.
 
 ## Common Workflows
 
