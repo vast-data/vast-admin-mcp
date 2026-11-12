@@ -1078,7 +1078,6 @@ def start_mcp(
                             kwargs_build.append(f"    if {python_param_name} and {python_param_name} != '': kwargs['{original_arg_name}'] = {python_param_name}")
                     
                     # Build debug info for MCP debugging mode
-                    import json
                     params_debug = []
                     for pn in param_names:
                         orig_name = arg_name_mapping.get(pn, pn)
@@ -1356,7 +1355,6 @@ def start_mcp(
                         kwargs_build.append(f"    if {python_param_name} and {python_param_name} != '': kwargs['{original_arg_name}'] = {python_param_name}")
                 
                 # Build debug info
-                import json
                 source_functions = merged_template.get('functions', [])
                 params_debug = []
                 for pn in param_names:

@@ -2,6 +2,12 @@
 
 All notable changes to this project will be documented in this file.
 
+## [Unreleased]
+
+### Fixed
+
+- **env: password references** -- `retrieve_password_secure` no longer raises `UnboundLocalError` on `os` when resolving `env:<VAR>` credentials. Redundant function-local `import os` in the keyring branch had shadowed the module-level name for the whole function, so Docker/`--env-file` and systemd setups using `"password": "env:…"` failed on every tool call. The same local-import shadowing is removed for `sys` in `handle_performance_graph_command` (missing `--monitor-name` now exits with code 1 instead of crashing) and for unused local `import json` in `start_mcp`.
+
 ## [0.2.7] - 2026-11-02
 
 ### Fixed

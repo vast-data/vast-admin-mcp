@@ -222,7 +222,6 @@ def retrieve_password_secure(cluster: str, username: str, password_ref: str) -> 
             if password is None:
                 # Keyring entry not found - this can happen in Docker when host keyring is not accessible
                 # Try to provide a helpful error message
-                import os
                 if os.path.exists('/.dockerenv') or os.environ.get('KEYRING_BACKEND'):
                     raise ValueError(
                         f"Password not found in keyring for {account}. "
@@ -233,7 +232,6 @@ def retrieve_password_secure(cluster: str, username: str, password_ref: str) -> 
             return password
         except Exception as e:
             # If keyring access fails (e.g., in Docker), provide helpful error
-            import os
             if os.path.exists('/.dockerenv') or os.environ.get('KEYRING_BACKEND'):
                 raise ValueError(
                     f"Failed to retrieve password from keyring for {account}: {e}. "

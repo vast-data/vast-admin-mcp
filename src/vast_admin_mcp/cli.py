@@ -604,9 +604,7 @@ def handle_performance_graph_command(args):
                             table_data.append(row)
                         
                         if table_data:
-                            from vast_admin_mcp.utils import output_results
                             import io
-                            import sys
                             # Capture table output
                             old_stdout = sys.stdout
                             sys.stdout = buffer = io.StringIO()
@@ -664,9 +662,7 @@ def handle_performance_graph_command(args):
                     table_data.append(row)
                 
                 if table_data:
-                    from vast_admin_mcp.utils import output_results
                     import io
-                    import sys
                     # Capture table output
                     old_stdout = sys.stdout
                     sys.stdout = buffer = io.StringIO()
