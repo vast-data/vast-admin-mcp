@@ -2,6 +2,12 @@
 
 All notable changes to this project will be documented in this file.
 
+## [Unreleased]
+
+### Fixed
+
+- **Ordering with Missing Values** -- `apply_ordering` no longer raises `TypeError: '<' not supported between instances of 'str' and 'int'` when sorting a numeric column (e.g. IOPS, latency) that has `None` values, or a column that mixes numbers and strings. Missing values sort first in ascending order; capacity-like fields still treat them as 0.
+
 ## [0.2.8] - 2026-11-18
 
 ### Added
