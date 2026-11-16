@@ -55,14 +55,22 @@ def _request_headers() -> Dict[str, str]:
         return {}
 
 
+def _strip_bearer(value: str) -> str:
+    value = value.strip()
+    return value[7:].strip() if value[:7].lower() == "bearer " else value
+
+
 def parse_bearer_header(value: Optional[str]) -> Dict[str, str]:
-    """``a=tok1, b=tok2`` -> {"a": "tok1", "b": "tok2"} (keys lower-cased; malformed parts ignored)."""
+    """``a=tok1, b=tok2`` -> {"a": "tok1", "b": "tok2"} (keys lower-cased; malformed parts ignored).
+
+    A leading ``Bearer `` on the value or on one token is ignored: gateways such as LiteLLM (on-behalf-of,
+    ``upstream_token_header``) always add it."""
     tokens: Dict[str, str] = {}
     if not value:
         return tokens
-    for part in value.split(","):
+    for part in _strip_bearer(value).split(","):
         key, sep, token = part.strip().partition("=")
-        key, token = key.strip().lower(), token.strip()
+        key, token = key.strip().lower(), _strip_bearer(token)
         if sep and key and token:
             tokens[key] = token
     return tokens

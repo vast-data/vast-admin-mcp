@@ -94,6 +94,13 @@ class TestHeaderParsing(unittest.TestCase):
         self.assertEqual(parse_bearer_header("Cluster-One=abc.def.ghi"), {"cluster-one": "abc.def.ghi"})
         self.assertEqual(parse_bearer_header(" a=1 , b = 2 ,junk, =x, c="), {"a": "1", "b": "2"})
 
+    def test_bearer_prefix_is_ignored(self):
+        # Gateways such as LiteLLM (on-behalf-of, upstream_token_header) put "Bearer " before the value.
+        self.assertEqual(parse_bearer_header("Bearer c1=tok"), {"c1": "tok"})
+        self.assertEqual(parse_bearer_header("bearer c1=tok, c2=t2"), {"c1": "tok", "c2": "t2"})
+        self.assertEqual(parse_bearer_header("c1=Bearer tok"), {"c1": "tok"})
+        self.assertEqual(parse_bearer_header("Bearer none"), {})
+
     def test_opt_in_only(self):
         self.assertTrue(uses_per_request_auth(PER_REQUEST_CLUSTER))
         self.assertTrue(uses_per_request_auth({"auth_method": " Per_Request "}))
