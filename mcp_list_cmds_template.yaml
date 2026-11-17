@@ -46,6 +46,7 @@ api_whitelist:
   
   # Policy and protection endpoints
   - viewpolicies: [post, delete]  # GET + POST + DELETE for create/delete operations
+  - qospolicies
   - protectionpolicies
   - protectedpaths
   - alarms
@@ -317,6 +318,71 @@ list_cmds:
         {{$arguments}}
       Returns:
         A list of view policies. Each item in the list will be a dictionary containing general information regarding a specific view policy.
+      Fields:
+        {{$fields}}
+      {{prefer_tables}}
+
+  # QoS policies command - list QoS policies from VAST cluster(s)
+  # NOTE: field names (mode, policy_type, static_limits, capacity_limits, is_default) and the
+  # views join (views.qos_policy holding the policy name) have not been verified against a live cluster.
+  qospolicies:
+    # API endpoints to call (first endpoint is the primary data source)
+    api_endpoints:
+    - qospolicies
+    - views
+
+    # Selected fields for simplified view
+    fields:
+      - <<: *cluster_field
+      - name: name
+        argument:
+          type: str
+          mandatory: false
+          filter: true
+          aliases:
+          - qos_policy_name
+          - qos_policy_names
+      - name: mode
+        argument:
+          type: str
+          mandatory: false
+          filter: true
+          description: QoS policy mode, for example STATIC, USED_CAPACITY or PROVISIONED_CAPACITY.
+          aliases:
+          - qos_policy_mode
+      - name: policy type
+        field: policy_type
+        argument:
+          type: str
+          mandatory: false
+          filter: true
+          description: What the policy applies to, for example VIEW or USER.
+          aliases:
+          - qos_policy_type
+      - name: static limits
+        field: static_limits
+        jq: tojson
+      - name: capacity limits
+        field: capacity_limits
+        jq: tojson
+      - name: is default
+        field: is_default
+      - name: views
+        description: The list of views that the QoS policy is attached to.
+        field: views.path
+        join_on:
+          field: name
+          on_field: qos_policy
+          act_on: all
+
+    description: |-
+      Use this tool to retrieve the QoS policies defined on VAST cluster(s), including the
+      bandwidth and IOPS limits and the views each policy is attached to. A policy with no
+      views is defined but unused.
+      Args:
+        {{$arguments}}
+      Returns:
+        A list of QoS policies. Each item is a dictionary describing one policy.
       Fields:
         {{$fields}}
       {{prefer_tables}}
