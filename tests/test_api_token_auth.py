@@ -9,7 +9,8 @@ from unittest.mock import MagicMock, patch
 sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
 
 from vast_admin_mcp import client as client_module
-from vast_admin_mcp import setup as setup_module
+# Alias must not be `setup_module` — pytest treats that name as an xUnit hook.
+from vast_admin_mcp import setup as vast_setup
 
 
 class TestApiTokenClientCreation(unittest.TestCase):
@@ -102,20 +103,20 @@ class TestApiTokenSetup(unittest.TestCase):
                     "results": [{"name": "prod", "sw_version": "5.3.0.12"}]
                 })
 
-        with patch.object(setup_module, "VASTClient", FakeClient), \
-                patch.object(setup_module, "store_password_secure", return_value="encrypted:token-ref") as store:
-            result = setup_module.validate_cluster(
+        with patch.object(vast_setup, "VASTClient", FakeClient), \
+                patch.object(vast_setup, "store_password_secure", return_value="encrypted:token-ref") as store:
+            result = vast_setup.validate_cluster(
                 cluster="https://vms.example.com:443",
                 tenant="default",
                 api_token="secret-token",
                 auth_method="api_token",
             )
 
-        store.assert_called_once_with("vms.example.com:443", setup_module.API_TOKEN_USERNAME, "secret-token")
+        store.assert_called_once_with("vms.example.com:443", vast_setup.API_TOKEN_USERNAME, "secret-token")
         self.assertEqual(result["cluster"], "vms.example.com:443")
         self.assertEqual(result["auth_method"], "api_token")
         self.assertEqual(result["api_token"], "encrypted:token-ref")
-        self.assertEqual(result["username"], setup_module.API_TOKEN_USERNAME)
+        self.assertEqual(result["username"], vast_setup.API_TOKEN_USERNAME)
         self.assertNotIn("password", result)
 
     def test_validate_cluster_rejects_api_token_when_clusters_endpoint_fails(self):
@@ -136,9 +137,9 @@ class TestApiTokenSetup(unittest.TestCase):
                 self.dashboard = MagicMock()
                 self.dashboard.status = FakeEndpoint({"clusters": [{"build": "5.3.0.12"}]})
 
-        with patch.object(setup_module, "VASTClient", FakeClient), \
-                patch.object(setup_module, "store_password_secure") as store:
-            result = setup_module.validate_cluster(
+        with patch.object(vast_setup, "VASTClient", FakeClient), \
+                patch.object(vast_setup, "store_password_secure") as store:
+            result = vast_setup.validate_cluster(
                 cluster="vms.example.com",
                 tenant="default",
                 api_token="bad-token",
