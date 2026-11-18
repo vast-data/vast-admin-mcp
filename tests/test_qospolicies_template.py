@@ -35,7 +35,8 @@ class TestQosPoliciesTemplate(unittest.TestCase):
         self.assertEqual(template["api_endpoints"], ["qospolicies", "views"])
 
     def test_views_whitelist_unchanged(self):
-        self.assertEqual(_parser().api_whitelist.get("views"), ["get", "post"])
+        # 0.2.8+ whitelists delete for YAML-driven delete_views_vast
+        self.assertEqual(_parser().api_whitelist.get("views"), ["get", "post", "delete"])
 
 
 if __name__ == "__main__":
