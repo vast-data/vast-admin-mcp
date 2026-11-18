@@ -8,6 +8,10 @@ All notable changes to this project will be documented in this file.
 
 - **QoS Policies List Tool** -- new `list_qospolicies_vast` dynamic list tool (`qospolicies` command in `mcp_list_cmds_template.yaml`) with a GET-only `qospolicies` entry in `api_whitelist`. Lists QoS policies per cluster with name, mode, policy type, static limits, capacity limits, default flag, and the views each policy is attached to. The whitelist entry also lets `create_view_vast` resolve a `qos_policy` name (to be confirmed). Field names and the views join are not yet verified against a live cluster.
 
+### Fixed
+
+- **Docker image Trivy scan** -- upgrade Debian `zlib1g` in the image build to clear CVE-2026-85091 (HIGH) and CVE-2026-27171 (MEDIUM).
+
 ## [0.2.8] - 2026-11-12
 
 ### Added
