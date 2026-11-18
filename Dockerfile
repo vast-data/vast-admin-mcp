@@ -21,7 +21,7 @@ LABEL org.opencontainers.image.title="VAST Admin MCP Server" \
       org.opencontainers.image.licenses="MIT"
 
 # Install jq and upgrade Debian packages with known CVEs from Trivy
-# gzip, glibc (libc6/libc-bin), pcre2, sqlite3, perl-base
+# gzip, glibc (libc6/libc-bin), pcre2, sqlite3, perl-base, zlib1g
 RUN apt-get update && \
     apt-get install -y --no-install-recommends \
     jq \
@@ -32,6 +32,7 @@ RUN apt-get update && \
     libpcre2-8-0 \
     libsqlite3-0 \
     perl-base \
+    zlib1g \
     && rm -rf /var/lib/apt/lists/*
 
 # Set working directory
