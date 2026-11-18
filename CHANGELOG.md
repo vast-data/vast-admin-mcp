@@ -2,6 +2,28 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.2.8] - 2026-11-18
+
+### Added
+
+- `QoS Policies List Tool` -- new `list_qospolicies_vast` dynamic list tool (`qospolicies` command in `mcp_list_cmds_template.yaml`) with a GET-only `qospolicies` entry in `api_whitelist`. Lists QoS policies per cluster with name, mode, policy type, static limits, capacity limits, default flag, and the views each policy is attached to. The whitelist entry also lets `create_view_vast` resolve a `qos_policy` name (to be confirmed). Field names and the views join are not yet verified against a live cluster.
+- `list_views_vast` protocol filter via server-side `protocols__contains` (never silently-ignored `protocols=`)
+- `list_tenants_vast` now exposes `client_ip_ranges` and `client_ip_ranges_summary`
+- New create tools (require `--read-write`): `create_tenant_vast`, `create_vippool_vast`, `create_user_vast`, `create_viewpolicy_vast`, `create_s3_key_vast`
+- `create_view_vast` extended for `DATABASE`/`KAFKA` (DATABASE requires S3; KAFKA requires `kafka_vip_pools`)
+- `create_s3_key_vast` locates users via `query_users`, enforces max 2 local keys, and POSTs `users/{id}/access_keys/`
+- New YAML-driven `delete_cmds` section auto-registers `delete_vippools_vast`, `delete_users_vast`, `delete_viewpolicies_vast`, `delete_views_vast`, `delete_s3_keys_vast` (tenant delete intentionally omitted)
+- VIP pool create always sends explicit `tenant_id`, including JSON `null` for tenantless/shared pools
+- **Per-user VAST credentials** -- opt-in per cluster with `"auth_method": "per_request"`. The cluster stores no credentials; each MCP HTTP request carries the caller's own VMS session token in `X-VAST-Bearer: <cluster>=<token>`, sent to VMS as `Authorization: Bearer`. VAST applies that user's roles and records their name. Clients are cached per token (separate `bearer_client` cache, 1 h), a missing or refused token fails the call with a clear error (never an empty list, never another login), and graphs from these clusters get unguessable file names. Clusters with stored credentials are unchanged and ignore the header. See [docs/per-request-auth.md](docs/per-request-auth.md).
+
+### Changed
+
+- **Read-write tool exposure** -- Create and delete MCP tools are registered only when the server is started with `--read-write`. In readonly mode they are omitted from the tool list (previously always visible, failing at call time).
+
+### Fixed
+
+- **env: password references** -- `retrieve_password_secure` no longer raises `UnboundLocalError` on `os` when resolving `env:<VAR>` credentials. Redundant function-local `import os` in the keyring branch had shadowed the module-level name for the whole function, so Docker/`--env-file` and systemd setups using `"password": "env:…"` failed on every tool call. The same local-import shadowing is removed for `sys` in `handle_performance_graph_command` (missing `--monitor-name` now exits with code 1 instead of crashing) and for unused local `import json` in `start_mcp`.
+
 ## [0.2.7] - 2026-11-02
 
 ### Fixed

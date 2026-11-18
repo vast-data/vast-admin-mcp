@@ -14,11 +14,12 @@ The template modifications file is merged with the default template, allowing us
 
 ## Overview
 
-The YAML file uses a structured format with five main sections:
+The YAML file uses a structured format with these main sections:
 - **api_whitelist**: API endpoint whitelist for security (restrictive by default)
 - **variables**: String replacements for use in descriptions
 - **field_anchors**: Reusable field definitions using YAML anchors
 - **list_cmds**: Command definitions for dynamic list tools
+- **delete_cmds**: Command definitions for dynamic delete tools (auto-registered as `delete_<name>_vast`)
 - **merged_list_cmds**: Merged command definitions that combine multiple list commands
 
 ## API Whitelist
@@ -41,7 +42,7 @@ api_whitelist:
   - tenants
   
   # With methods - GET + specified methods
-  - views: [post]  # GET + POST for create operations
+  - views: [post, delete]  # GET + POST + DELETE for create/delete operations
   - snapshots: [post]  # GET + POST for create operations
   - quotas: [post, patch]  # GET + POST + PATCH for create/update operations
 ```
@@ -51,14 +52,15 @@ api_whitelist:
 - **Restrictive by default**: If an endpoint is not in the whitelist, it is denied
 - **Method validation**: Only specified HTTP methods are allowed
 - **Sub-endpoint support**: If a parent endpoint is whitelisted (e.g., `monitors`), all sub-endpoints are allowed (e.g., `monitors.ad_hoc_query`)
-- **All API calls validated**: Both list and create functions use the whitelist for validation
+- **All API calls validated**: List, create, and delete functions use the whitelist for validation
 
 ### Why This Matters
 
-All API calls (including create functions) are validated against the whitelist. This ensures:
+All API calls (including create/delete functions) are validated against the whitelist. This ensures:
 - Only approved endpoints can be accessed
 - Only approved HTTP methods can be used
 - Create operations require explicit whitelist configuration (e.g., `- views: [post]`)
+- Delete operations require explicit `delete` in the whitelist (e.g., `- vippools: [post, delete]`)
 
 ## YAML File Structure
 
@@ -594,6 +596,55 @@ list_cmds:
       Fields:
         {{$fields}}
 ```
+
+## Delete Commands
+
+The `delete_cmds` section defines YAML-driven delete tools. Each entry is auto-registered as `delete_<name>_vast` when the MCP server runs with `--read-write`.
+
+### Structure
+
+```yaml
+delete_cmds:
+  vippools:
+    api_endpoint: vippools
+    description: |-
+      Delete a VIP pool by name. Requires --read-write.
+      {{cluster_warning}}
+      Args:
+        {{$arguments}}
+      Returns:
+        A short confirmation that the VIP pool was deleted.
+    fields:
+      - name: cluster
+        argument:
+          type: str
+          mandatory: true
+      - name: name
+        field: name
+        argument:
+          type: str
+          mandatory: true
+          filter: true
+```
+
+### Contract
+
+| Key | Purpose |
+|---|---|
+| `api_endpoint` | VMS endpoint used for lookup GET + DELETE by id |
+| `fields` + `argument` | MCP/CLI tool args; `filter: true` fields locate the object |
+| `description` | Tool description; must include `{{$arguments}}` |
+| optional `create_mcp_tool` | Set `false` to skip MCP registration |
+
+### Expansion
+
+To add a new standard delete later:
+
+1. Add a `delete_cmds.<resource>` entry with identity fields
+2. Add `delete` to that endpoint in `api_whitelist`
+3. Restart MCP — `delete_<resource>_vast` appears
+
+Lookup must match exactly one object. Tenant delete is intentionally omitted from the default template.
 
 ## Merged List Commands
 

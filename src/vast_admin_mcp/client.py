@@ -146,7 +146,9 @@ def _patch_vast_client_request():
         
         # Rest of the request logic (copied from VASTClient.request)
         if self._token:
-            headers = {'authorization': f'Api-Token {self._token}'}
+            # BearerVASTClient (per-request VMS session tokens) sends Bearer; every other client keeps Api-Token.
+            # Look it up on the class: VASTClient.__getattr__ turns unknown instance attributes into endpoints.
+            headers = {'authorization': f"{getattr(type(self), 'AUTH_SCHEME', 'Api-Token')} {self._token}"}
         else:
             headers = urllib3.make_headers(basic_auth=self._user + ':' + self._password)
         if self._tenant:
@@ -177,6 +179,11 @@ def _patch_vast_client_request():
                          http.HTTPStatus.PARTIAL_CONTENT}
         
         if r.status not in SUCCESS_CODES:
+            if isinstance(self, BearerVASTClient) and is_token_rejection(r.status, r.data):
+                # Per-request token refused: say so, instead of a failure callers may turn into an empty list.
+                raise PerRequestTokenRejected(
+                    f"VAST refused your token for {self._address} (HTTP {r.status}): it expired or was revoked; get a new one"
+                )
             from vastpy import RESTFailure
             raise RESTFailure(method, self._url, fields, r.status, r.data)
         data = r.data
@@ -189,7 +196,30 @@ def _patch_vast_client_request():
 
 # Apply the patch when this module is imported
 _patch_vast_client_request()
+
+
+class BearerVASTClient(VASTClient):
+    """VASTClient that authenticates with a VMS session token (Authorization: Bearer).
+
+    vastpy builds every endpoint client with self.__class__(...), so the scheme carries through.
+    Used only for clusters configured with auth_method "per_request" (see request_auth.py).
+    """
+    AUTH_SCHEME = 'Bearer'
+
+
 from .utils import retrieve_password_secure
+from .request_auth import (
+    PerRequestAuthRequired,
+    PerRequestTokenRejected,
+    is_token_rejection,
+    log_per_request_client,
+    require_bearer_token,
+    token_fingerprint,
+    uses_per_request_auth,
+)
+
+# Per-request clients are cached per token for at most this long (VMS access tokens last 1 h by default).
+PER_REQUEST_CLIENT_TTL_SECONDS = 3600
 from .cache import get_cache_manager
 
 # Endpoints that do not support pagination (return single dict or non-paginated list)
@@ -255,7 +285,19 @@ def _should_send_tenant(cluster_info: Dict[str, Any]) -> bool:
 
 
 def _create_client_from_cluster_info(cluster_address: str, cluster_info: Dict[str, Any], version: str = 'latest') -> VASTClient:
-    """Create a VASTClient from stored cluster config, supporting password or API token auth."""
+    """Create a VASTClient from stored cluster config, supporting password or API token auth.
+
+    Clusters with auth_method "per_request" use the caller's VMS session token from the current
+    request instead (BearerVASTClient); without one this raises PerRequestAuthRequired.
+    """
+    if uses_per_request_auth(cluster_info):
+        token = require_bearer_token(cluster_address, cluster_info)
+        log_per_request_client(cluster_address, token)
+        kwargs = {'address': cluster_address, 'token': token}
+        if _should_send_tenant(cluster_info):
+            kwargs['tenant'] = cluster_info.get('tenant', '')
+        return BearerVASTClient(**kwargs)
+
     use_api_token = _uses_api_token(cluster_info)
     kwargs = {
         'address': cluster_address,
@@ -365,6 +407,9 @@ def resolve_cluster_identifier(identifier: str, config: dict, client_cache: Opti
                     
                     # Only query the potential matches, not all clusters
                     for c in potential_matches:
+                        if uses_per_request_auth(c):
+                            # No stored credentials to query with: per_request clusters need cluster_name in config.
+                            continue
                         try:
                             # Reuse client from cache if available
                             client = None
@@ -431,18 +476,29 @@ def get_or_create_client(cluster: str) -> VASTClient:
     """
     # Resolve cluster identifier to address
     cfg = load_config()
-    cluster_address, _, _ = resolve_cluster_identifier(cluster, cfg)
+    cluster_address, cluster_info, _ = resolve_cluster_identifier(cluster, cfg)
+    cache_name, cache_key, ttl = _client_cache_slot(cluster_address, cluster_info)
     
     # Return cached client if available
     # Check cache first
-    cached_client = _cache_manager.get('client', cluster_address)
+    cached_client = _cache_manager.get(cache_name, cache_key)
     if cached_client is not None:
         return cached_client
     
     # Create new client and cache it
     client = create_vast_client(cluster_address)
-    _cache_manager.set('client', cluster_address, client)
+    _cache_manager.set(cache_name, cache_key, client, ttl=ttl)
     return client
+
+
+def _client_cache_slot(cluster_address: str, cluster_info: Dict[str, Any]) -> tuple:
+    """(cache name, key, ttl). Stored credentials: the 'client' cache keyed by address, as before.
+    per_request clusters: a separate 'bearer_client' cache (its own TTL; the cache manager keeps one
+    TTL per cache) keyed by address + token fingerprint, so one caller's client never serves another."""
+    if uses_per_request_auth(cluster_info):
+        token = require_bearer_token(cluster_address, cluster_info)
+        return 'bearer_client', f"{cluster_address}#{token_fingerprint(token)}", PER_REQUEST_CLIENT_TTL_SECONDS
+    return 'client', cluster_address, None
 
 
 def clear_client_cache():
@@ -451,6 +507,7 @@ def clear_client_cache():
     Useful for testing or when you need to force client recreation.
     """
     _cache_manager.clear('client')
+    _cache_manager.clear('bearer_client')
 
 
 # Create VAST client instance for cluster
@@ -473,10 +530,13 @@ def create_vast_client(cluster: str, use_cache: bool = True):
     if use_cache:
         # Resolve to address for cache lookup
         try:
-            cluster_address, _, _ = resolve_cluster_identifier(cluster, cfg)
-            cached_client = _cache_manager.get('client', cluster_address)
+            cluster_address, cluster_info, _ = resolve_cluster_identifier(cluster, cfg)
+            cache_name, cache_key, _ = _client_cache_slot(cluster_address, cluster_info)
+            cached_client = _cache_manager.get(cache_name, cache_key)
             if cached_client is not None:
                 return cached_client
+        except PerRequestAuthRequired:
+            raise
         except ValueError:
             # If resolution fails, continue to create new client
             pass
@@ -507,7 +567,8 @@ def create_vast_client(cluster: str, use_cache: bool = True):
         
         # Cache the client if caching is enabled
         if use_cache:
-            _cache_manager.set('client', cluster_address, client)
+            cache_name, cache_key, ttl = _client_cache_slot(cluster_address, cluster_info)
+            _cache_manager.set(cache_name, cache_key, client, ttl=ttl)
         
         return client
     except Exception as e:

@@ -222,7 +222,6 @@ def retrieve_password_secure(cluster: str, username: str, password_ref: str) -> 
             if password is None:
                 # Keyring entry not found - this can happen in Docker when host keyring is not accessible
                 # Try to provide a helpful error message
-                import os
                 if os.path.exists('/.dockerenv') or os.environ.get('KEYRING_BACKEND'):
                     raise ValueError(
                         f"Password not found in keyring for {account}. "
@@ -233,7 +232,6 @@ def retrieve_password_secure(cluster: str, username: str, password_ref: str) -> 
             return password
         except Exception as e:
             # If keyring access fails (e.g., in Docker), provide helpful error
-            import os
             if os.path.exists('/.dockerenv') or os.environ.get('KEYRING_BACKEND'):
                 raise ValueError(
                     f"Failed to retrieve password from keyring for {account}: {e}. "
@@ -370,6 +368,9 @@ def logging_main(debug: bool = False):
     formatter = logging.Formatter('%(asctime)s - %(levelname)s - %(message)s')
     formatterdebug = logging.Formatter('%(asctime)s - %(levelname)s - %(funcName)s - %(message)s')
     
+    # Ensure log directory exists (fresh CI / first-run homes have no ~/.vast-admin-mcp)
+    os.makedirs(os.path.dirname(LOG_PATH), exist_ok=True)
+
     # create file handler which logs even debug messages
     fh = logging.handlers.RotatingFileHandler(LOG_PATH, maxBytes=LOG_FILE_MAX_BYTES, backupCount=LOG_FILE_BACKUP_COUNT)
     fh.setLevel(logging.DEBUG)

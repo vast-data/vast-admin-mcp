@@ -16,6 +16,7 @@ import re
 from datetime import datetime, timedelta, timezone
 from typing import Dict, List, Any, Optional, Tuple
 
+from .request_auth import PerRequestAuthRequired
 from .template_parser import TemplateParser
 from .client import create_vast_client, call_vast_api
 from .config import load_config, JQ_TIMEOUT_SECONDS
@@ -388,6 +389,9 @@ class CommandExecutor:
                 )
                 
                 api_data[endpoint] = all_results
+            except PerRequestAuthRequired:
+                # Per-user credentials missing or refused: fail the call, never answer with an empty list.
+                raise
             except ValueError as e:
                 # Whitelist validation error - log and skip this endpoint
                 logging.error(f"Access denied for endpoint {endpoint}: {e}")

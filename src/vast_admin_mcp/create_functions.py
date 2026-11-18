@@ -18,9 +18,102 @@ from .utils import (
 from .client import (
     create_vast_client, get_id_by_name, resolve_cluster_identifier, call_vast_api
 )
-from .functions import list_dynamic
+from .functions import list_dynamic, query_users
 from .template_parser import TemplateParser
 from .config import TEMPLATE_MODIFICATIONS_FILE, get_default_template_path
+
+
+MAX_LOCAL_S3_KEYS_PER_USER = 2
+
+
+def _resolve_local_provider_for_tenant(client, tenant_name: str, whitelist) -> Dict[str, Any]:
+    """Find the local provider assigned to a tenant via assigned_tenants_preview."""
+    providers = call_vast_api(
+        client=client,
+        endpoint='localproviders',
+        method='get',
+        whitelist=whitelist,
+    )
+    matches = []
+    for provider in providers:
+        preview = provider.get('assigned_tenants_preview') or ''
+        assigned = [t.strip() for t in str(preview).split(',') if t.strip()]
+        if tenant_name in assigned:
+            matches.append(provider)
+
+    if len(matches) == 1:
+        return matches[0]
+    if not matches:
+        # Fall back to a provider named 'default' when present
+        for provider in providers:
+            if str(provider.get('name', '')).strip().lower() == 'default':
+                return provider
+        raise ValueError(
+            f"No local provider is assigned to tenant '{tenant_name}'. "
+            f"Pass provider explicitly."
+        )
+    names = ', '.join(str(p.get('name')) for p in matches)
+    raise ValueError(
+        f"Multiple local providers are assigned to tenant '{tenant_name}': {names}. "
+        f"Pass provider explicitly."
+    )
+
+
+def _resolve_provider(client, provider: Optional[str], tenant_name: str, whitelist) -> Dict[str, Any]:
+    """Resolve provider by name/id, or the tenant's assigned local provider."""
+    if provider is None or not str(provider).strip():
+        return _resolve_local_provider_for_tenant(client, tenant_name, whitelist)
+
+    token = str(provider).strip()
+    providers = call_vast_api(
+        client=client,
+        endpoint='localproviders',
+        method='get',
+        whitelist=whitelist,
+    )
+    if token.isdigit():
+        for p in providers:
+            if str(p.get('id')) == token:
+                return p
+        raise ValueError(f"Local provider id '{token}' not found")
+
+    matches = [p for p in providers if str(p.get('name', '')).strip() == token]
+    if len(matches) == 1:
+        return matches[0]
+    if not matches:
+        raise ValueError(f"Local provider '{token}' not found")
+    raise ValueError(f"Ambiguous local provider name '{token}'")
+
+
+def _exact_query_user_match(users: List[Dict[str, Any]], user_name: str) -> Dict[str, Any]:
+    """Pick an exact name/login_name match from query_users results."""
+    needle = user_name.strip()
+    matches = []
+    for user in users:
+        names = {
+            str(user.get('name') or '').strip(),
+            str(user.get('login_name') or '').strip(),
+        }
+        if needle in names:
+            matches.append(user)
+    if not matches:
+        raise ValueError(f"User '{needle}' not found via query_users")
+    if len(matches) > 1:
+        raise ValueError(
+            f"Ambiguous user '{needle}': query_users returned {len(matches)} exact matches"
+        )
+    return matches[0]
+
+
+def _count_enabled_access_keys(user: Dict[str, Any]) -> int:
+    raw = user.get('access_keys') or ''
+    if isinstance(raw, list):
+        return len([
+            k for k in raw
+            if (isinstance(k, dict) and k.get('enabled', True) and k.get('access_key'))
+            or (isinstance(k, str) and k.strip())
+        ])
+    return len([k for k in str(raw).split(',') if k.strip()])
 
 
 
@@ -174,6 +267,75 @@ def get_user_paths(
     return client_paths
 
 
+def _parse_ip_ranges(ip_ranges: Any, arg_name: str = 'ip_ranges') -> List[List[str]]:
+    """Parse IP ranges from list pairs or a comma-separated start-end string.
+
+    Accepts:
+      - [["1.1.1.1", "1.1.1.10"], ...]
+      - "1.1.1.1-1.1.1.10,2.2.2.2-2.2.2.2"
+      - "1.1.1.1,2.2.2.2" (single IPs become [ip, ip])
+    """
+    if ip_ranges is None:
+        raise ValueError(f"{arg_name} is required")
+
+    if isinstance(ip_ranges, list):
+        parsed: List[List[str]] = []
+        for item in ip_ranges:
+            if isinstance(item, (list, tuple)) and len(item) == 2:
+                start, end = str(item[0]).strip(), str(item[1]).strip()
+                if not start or not end:
+                    raise ValueError(f"Invalid {arg_name} pair: {item}")
+                parsed.append([start, end])
+            else:
+                raise ValueError(f"Invalid {arg_name} entry: {item}. Expected [start, end] pairs.")
+        if not parsed:
+            raise ValueError(f"{arg_name} must contain at least one [start, end] pair")
+        return parsed
+
+    if isinstance(ip_ranges, str):
+        text = ip_ranges.strip()
+        if not text:
+            raise ValueError(f"{arg_name} is required")
+        parsed = []
+        for part in text.split(','):
+            part = part.strip()
+            if not part:
+                continue
+            if '-' in part:
+                start, end = [p.strip() for p in part.split('-', 1)]
+            else:
+                start = end = part
+            if not start or not end:
+                raise ValueError(f"Invalid {arg_name} entry: '{part}'")
+            parsed.append([start, end])
+        if not parsed:
+            raise ValueError(f"{arg_name} must contain at least one IP or start-end range")
+        return parsed
+
+    raise ValueError(f"{arg_name} must be a list of [start, end] pairs or a comma-separated string")
+
+
+def _resolve_vippool_ids(client, vip_pools: Any, whitelist) -> List[int]:
+    """Resolve comma-separated VIP pool names/ids to integer ids."""
+    if vip_pools is None:
+        return []
+    if isinstance(vip_pools, list):
+        tokens = [str(v).strip() for v in vip_pools if str(v).strip()]
+    else:
+        tokens = [p.strip() for p in str(vip_pools).split(',') if p.strip()]
+
+    ids: List[int] = []
+    for token in tokens:
+        if token.isdigit():
+            ids.append(int(token))
+            continue
+        pool_id = get_id_by_name(client, 'vippools', token, whitelist=whitelist)
+        if not pool_id:
+            raise ValueError(f"VIP pool '{token}' not found")
+        ids.append(int(pool_id))
+    return ids
+
+
 def create_view(
     cluster: str,
     tenant: str = 'default',
@@ -184,7 +346,9 @@ def create_view(
     share: Optional[str] = None,
     policy: Optional[str] = None,
     bucket_owner: Optional[str] = None,
-    qos_policy: Optional[str] = None
+    qos_policy: Optional[str] = None,
+    kafka_vip_pools: Optional[str] = None,
+    name: Optional[str] = None,
 ) -> List[Dict[str, str]]:
     """Create a view in a VAST cluster. Provide cluster and path at minimum.
 
@@ -192,13 +356,15 @@ def create_view(
         cluster: Cluster address or name. Required.
         tenant: Tenant name that owns the view. Defaults to 'default' if not provided.
         path: View path (e.g., /s3/mybucket, /nfs/myshare). Required.
-        protocols: Comma seperated list of protocols to enable (e.g., NFS,S3,SMB,ENDPOINT). if not specified, NFS will be used. when S3 or ENDPOINT is specified, bucket and bucket_owner must be provided. when SMB is specified, share must be provided. (protocols are case-insensitive)
+        protocols: Comma seperated list of protocols to enable (e.g., NFS,S3,SMB,ENDPOINT,DATABASE,KAFKA). if not specified, NFS will be used. when S3 or ENDPOINT is specified, bucket and bucket_owner must be provided. when SMB is specified, share must be provided. DATABASE requires S3. KAFKA requires kafka_vip_pools. (protocols are case-insensitive)
         bucket: Bucket name for S3 protocol. Must be provided if S3 or ENDPOINT protocol is requested.
         bucket_owner: Bucket owner name for S3 protocol. Must be provided if S3 or ENDPOINT protocol is enabled.
         share: Share name for NFS/SMB protocol. Must be provided if SMB is in the protocols list.
         policy: View policy name.
         hard_quota: Hard quota for the view (e.g., 10GB, 100GB, 1TB).
         qos_policy: QoS policy name that can help manage performance for the view.
+        kafka_vip_pools: Comma-separated VIP pool names or ids. Required when KAFKA is in protocols.
+        name: Optional view name. Defaults to path basename when omitted.
     
     Returns:
         A list of client paths for the new view for the specified protocols. each item in the list will be a dictionary containing protocol and client path.
@@ -236,6 +402,12 @@ def create_view(
         protocols = 'NFS'
     proto_list = [p.strip().upper() for p in protocols.split(',') if p and p.strip()]
 
+    if 'DATABASE' in proto_list and 'S3' not in proto_list:
+        raise ValueError("The DATABASE protocol can only be provided together with the S3 protocol")
+    if 'KAFKA' in proto_list and not kafka_vip_pools:
+        raise ValueError("kafka_vip_pools is required when KAFKA protocol is enabled")
+    if ('S3' in proto_list or 'ENDPOINT' in proto_list) and (not bucket or not bucket_owner):
+        raise ValueError("bucket and bucket_owner are required when S3 or ENDPOINT protocol is enabled")
     # Check if bucket is specified and bucket owner is provided for S3 or ENDPOINT protocols 
     if bucket and (not bucket_owner or ('S3' not in proto_list and 'ENDPOINT' not in proto_list)):
         raise ValueError(f"Bucket {bucket} is specified, but bucket owner or S3 protocol is not provided.")
@@ -258,6 +430,8 @@ def create_view(
         'protocols': proto_list,
         'policy_id': policy_id,
     }
+    if name:
+        payload['name'] = name
     
     qos_policy_id = get_id_by_name(client, 'qospolicies', qos_policy, whitelist=whitelist) if qos_policy else None
     if qos_policy and not qos_policy_id:
@@ -269,6 +443,8 @@ def create_view(
     if bucket:
         payload['bucket'] = bucket
         payload['bucket_owner'] = bucket_owner
+    if kafka_vip_pools:
+        payload['kafka_vip_pools'] = _resolve_vippool_ids(client, kafka_vip_pools, whitelist)
     
     try:
         logging.info(f"Creating view on cluster={cluster_address} tenant={tenant}, path={path} policy: {policy} {'Hard quota: ' + hard_quota if hard_quota else ''}")
@@ -389,7 +565,9 @@ def create_view_from_template(
                 bucket=f"{view_params.get('bucket_prefix')}{i}" if view_params.get('bucket_prefix') else None,
                 share=f"{view_params.get('share_prefix')}{i}" if view_params.get('share_prefix') else None,
                 policy=view_params.get('policy') if view_params.get('policy') else None,
-                bucket_owner=view_params.get('bucket_owner') if view_params.get('bucket_owner') else None
+                bucket_owner=view_params.get('bucket_owner') if view_params.get('bucket_owner') else None,
+                kafka_vip_pools=view_params.get('kafka_vip_pools') if view_params.get('kafka_vip_pools') else None,
+                name=view_params.get('name') if view_params.get('name') else None,
             )
             created_views.extend(created_view)
         except Exception as e:
@@ -1101,4 +1279,406 @@ def create_support_bundle(
     except Exception as e:
         logging.error(f"Failed to create support bundle on {cluster_address}. Error: {e}")
         raise
+
+
+def create_tenant(
+    cluster: str,
+    name: str,
+    client_ip_ranges: Any,
+) -> Dict[str, Any]:
+    """Create a tenant with client IP ranges.
+
+    Args:
+        cluster: Cluster address or name. Required.
+        name: Tenant name. Required.
+        client_ip_ranges: List of [start, end] pairs, or comma-separated
+            "start-end" / single-IP strings.
+    """
+    if not name or not str(name).strip():
+        raise ValueError("name is required for tenant creation")
+
+    ranges = _parse_ip_ranges(client_ip_ranges, arg_name='client_ip_ranges')
+    config = load_config()
+    cluster_address, _, _ = resolve_cluster_identifier(cluster, config)
+    client = create_vast_client(cluster_address)
+    whitelist = get_api_whitelist()
+
+    payload = {
+        'name': str(name).strip(),
+        'client_ip_ranges': ranges,
+    }
+    logging.info(f"Creating tenant name={payload['name']} on cluster={cluster_address}")
+    created = call_vast_api(
+        client=client,
+        endpoint='tenants',
+        method='post',
+        params=payload,
+        whitelist=whitelist,
+    )
+    tenant = created[0] if created else {}
+    return {
+        'Cluster': cluster_address,
+        'ID': tenant.get('id'),
+        'Name': tenant.get('name', payload['name']),
+        'Client IP Ranges': tenant.get('client_ip_ranges', ranges),
+        'Client IP Ranges Summary': tenant.get('client_ip_ranges_summary'),
+    }
+
+
+def create_vippool(
+    cluster: str,
+    name: str,
+    ip_ranges: Any,
+    tenant: Optional[str] = None,
+    role: str = 'PROTOCOLS',
+    subnet_cidr: int = 16,
+    vlan: int = 0,
+    gw_ip: str = '',
+    port_membership: str = 'ALL',
+    cnode_ids: Optional[Any] = None,
+    enabled: bool = True,
+) -> Dict[str, Any]:
+    """Create a VIP pool.
+
+    Always sends tenant_id explicitly. Pass tenant=None/''/'none'/'null' for a
+    tenantless (shared) pool — omitting tenant_id silently binds to default on VMS.
+    """
+    if not name or not str(name).strip():
+        raise ValueError("name is required for VIP pool creation")
+
+    ranges = _parse_ip_ranges(ip_ranges, arg_name='ip_ranges')
+    config = load_config()
+    cluster_address, _, _ = resolve_cluster_identifier(cluster, config)
+    client = create_vast_client(cluster_address)
+    whitelist = get_api_whitelist()
+
+    tenant_token = None if tenant is None else str(tenant).strip()
+    tenantless_tokens = {'', 'none', 'null', 'tenantless'}
+    if tenant_token is None or tenant_token.lower() in tenantless_tokens:
+        tenant_id = None
+        tenant_label = 'tenantless'
+    else:
+        tenant_id = get_id_by_name(client, 'tenants', tenant_token, whitelist=whitelist)
+        if not tenant_id:
+            raise ValueError(f"Tenant {tenant_token} not found on cluster {cluster_address}.")
+        tenant_label = tenant_token
+
+    resolved_cnode_ids: List[int] = []
+    if cnode_ids:
+        if isinstance(cnode_ids, list):
+            tokens = [str(v).strip() for v in cnode_ids if str(v).strip()]
+        else:
+            tokens = [p.strip() for p in str(cnode_ids).split(',') if p.strip()]
+        for token in tokens:
+            if token.isdigit():
+                resolved_cnode_ids.append(int(token))
+            else:
+                cnode_id = get_id_by_name(client, 'cnodes', token, whitelist=whitelist)
+                if not cnode_id:
+                    raise ValueError(f"CNode '{token}' not found on cluster {cluster_address}.")
+                resolved_cnode_ids.append(int(cnode_id))
+
+    payload: Dict[str, Any] = {
+        'name': str(name).strip(),
+        'role': role or 'PROTOCOLS',
+        'tenant_id': tenant_id,  # explicit null for tenantless pools
+        'ip_ranges': ranges,
+        'subnet_cidr': int(subnet_cidr),
+        'vlan': int(vlan),
+        'gw_ip': gw_ip if gw_ip is not None else '',
+        'port_membership': port_membership or 'ALL',
+        'cnode_ids': resolved_cnode_ids,
+        'enabled': bool(enabled),
+    }
+    logging.info(
+        f"Creating vippool name={payload['name']} tenant={tenant_label} on cluster={cluster_address}"
+    )
+    created = call_vast_api(
+        client=client,
+        endpoint='vippools',
+        method='post',
+        params=payload,
+        whitelist=whitelist,
+    )
+    pool = created[0] if created else {}
+    return {
+        'Cluster': cluster_address,
+        'ID': pool.get('id'),
+        'Name': pool.get('name', payload['name']),
+        'Tenant': tenant_label,
+        'Tenant ID': pool.get('tenant_id', tenant_id),
+        'Role': pool.get('role', payload['role']),
+        'IP Ranges': pool.get('ip_ranges', ranges),
+        'Enabled': pool.get('enabled', enabled),
+    }
+
+
+def create_user(
+    cluster: str,
+    name: str,
+    uid: int,
+    local_provider: Optional[str] = None,
+) -> Dict[str, Any]:
+    """Create a local user.
+
+    Users have no tenant field; tenant scope comes from the local provider.
+    """
+    if not name or not str(name).strip():
+        raise ValueError("name is required for user creation")
+    if uid is None:
+        raise ValueError("uid is required for user creation")
+
+    config = load_config()
+    cluster_address, _, _ = resolve_cluster_identifier(cluster, config)
+    client = create_vast_client(cluster_address)
+    whitelist = get_api_whitelist()
+
+    provider_token = None if local_provider is None else str(local_provider).strip()
+    if not provider_token:
+        local_provider_id = 1
+        provider_label = '1'
+    elif provider_token.isdigit():
+        local_provider_id = int(provider_token)
+        provider_label = provider_token
+    else:
+        local_provider_id = get_id_by_name(client, 'localproviders', provider_token, whitelist=whitelist)
+        if not local_provider_id:
+            raise ValueError(f"Local provider '{provider_token}' not found on cluster {cluster_address}.")
+        provider_label = provider_token
+
+    payload = {
+        'name': str(name).strip(),
+        'uid': int(uid),
+        'local_provider_id': int(local_provider_id),
+    }
+    logging.info(f"Creating user name={payload['name']} uid={payload['uid']} on cluster={cluster_address}")
+    created = call_vast_api(
+        client=client,
+        endpoint='users',
+        method='post',
+        params=payload,
+        whitelist=whitelist,
+    )
+    user = created[0] if created else {}
+    return {
+        'Cluster': cluster_address,
+        'ID': user.get('id'),
+        'Name': user.get('name', payload['name']),
+        'UID': user.get('uid', payload['uid']),
+        'Local Provider': provider_label,
+        'Local Provider ID': user.get('local_provider_id', local_provider_id),
+    }
+
+
+def create_viewpolicy(
+    cluster: str,
+    name: str,
+    tenant: str,
+    flavor: str = 'S3_NATIVE',
+    auth_source: str = 'PROVIDERS',
+    access_flavor: str = 'ALL',
+    path_length: str = 'LCD',
+    allowed_characters: str = 'LCD',
+    nfs_read_write: Optional[Any] = None,
+    s3_read_write: Optional[Any] = None,
+) -> Dict[str, Any]:
+    """Create a view policy.
+
+    Do not send legacy read_write together with nfs_read_write.
+    """
+    if not name or not str(name).strip():
+        raise ValueError("name is required for view policy creation")
+    if not tenant or not str(tenant).strip():
+        raise ValueError("tenant is required for view policy creation")
+
+    def _as_list(value: Any, default: List[str]) -> List[str]:
+        if value is None:
+            return list(default)
+        if isinstance(value, list):
+            return [str(v).strip() for v in value if str(v).strip()]
+        return [p.strip() for p in str(value).split(',') if p.strip()]
+
+    config = load_config()
+    cluster_address, _, _ = resolve_cluster_identifier(cluster, config)
+    client = create_vast_client(cluster_address)
+    whitelist = get_api_whitelist()
+
+    tenant_name = str(tenant).strip()
+    tenant_id = get_id_by_name(client, 'tenants', tenant_name, whitelist=whitelist)
+    if not tenant_id:
+        raise ValueError(f"Tenant {tenant_name} not found on cluster {cluster_address}.")
+
+    payload: Dict[str, Any] = {
+        'name': str(name).strip(),
+        'tenant_id': tenant_id,
+        'flavor': flavor or 'S3_NATIVE',
+        'auth_source': auth_source or 'PROVIDERS',
+        'access_flavor': access_flavor or 'ALL',
+        'path_length': path_length or 'LCD',
+        'allowed_characters': allowed_characters or 'LCD',
+        'nfs_read_write': _as_list(nfs_read_write, ['*']),
+        's3_read_write': _as_list(s3_read_write, ['*']),
+    }
+    logging.info(
+        f"Creating viewpolicy name={payload['name']} tenant={tenant_name} on cluster={cluster_address}"
+    )
+    created = call_vast_api(
+        client=client,
+        endpoint='viewpolicies',
+        method='post',
+        params=payload,
+        whitelist=whitelist,
+    )
+    policy = created[0] if created else {}
+    return {
+        'Cluster': cluster_address,
+        'ID': policy.get('id'),
+        'Name': policy.get('name', payload['name']),
+        'Tenant': tenant_name,
+        'Tenant ID': policy.get('tenant_id', tenant_id),
+        'Flavor': policy.get('flavor', payload['flavor']),
+        'Auth Source': policy.get('auth_source', payload['auth_source']),
+    }
+
+
+def create_s3_key(
+    cluster: str,
+    user: str,
+    tenant: Optional[str] = None,
+    provider: Optional[str] = None,
+) -> Dict[str, Any]:
+    """Create a local S3 access key for a user.
+
+    Locates the user through query_users (tenant-scoped), validates the user has
+    fewer than 2 local S3 keys, then POSTs to users/{id}/access_keys/.
+
+    Args:
+        cluster: Cluster address or name. Required.
+        user: User name / login name. Required.
+        tenant: Tenant name. Optional; defaults to 'default' and is noted in the output.
+        provider: Local provider name or id. Optional; when omitted, uses the local
+            provider assigned to the tenant.
+    """
+    if not cluster or not str(cluster).strip():
+        raise ValueError("cluster is required for S3 key creation")
+    if not user or not str(user).strip():
+        raise ValueError("user is required for S3 key creation")
+
+    user_name = str(user).strip()
+    tenant_was_defaulted = not (tenant and str(tenant).strip())
+    tenant_name = 'default' if tenant_was_defaulted else str(tenant).strip()
+
+    # Locate user details via existing query_users functionality
+    queried = query_users(cluster=cluster, tenant=tenant_name, prefix=user_name, top=50)
+    matched_user = _exact_query_user_match(queried, user_name)
+
+    existing_key_count = _count_enabled_access_keys(matched_user)
+    if existing_key_count >= MAX_LOCAL_S3_KEYS_PER_USER:
+        raise ValueError(
+            f"User '{user_name}' already has {existing_key_count} local S3 keys "
+            f"(maximum {MAX_LOCAL_S3_KEYS_PER_USER}). Delete an existing key before creating another."
+        )
+
+    config = load_config()
+    cluster_address, _, _ = resolve_cluster_identifier(cluster, config)
+    client = create_vast_client(cluster_address)
+    whitelist = get_api_whitelist()
+
+    tenant_id = get_id_by_name(client, 'tenants', tenant_name, whitelist=whitelist)
+    if not tenant_id:
+        raise ValueError(f"Tenant '{tenant_name}' not found on cluster {cluster_address}.")
+
+    provider_obj = _resolve_provider(client, provider, tenant_name, whitelist)
+    provider_id = provider_obj.get('id')
+    provider_name = provider_obj.get('name')
+
+    # Resolve VMS user object id under the local provider (needed for access_keys POST)
+    user_params: Dict[str, Any] = {'name': user_name}
+    if provider_id is not None:
+        user_params['local_provider_id'] = provider_id
+    local_users = call_vast_api(
+        client=client,
+        endpoint='users',
+        method='get',
+        params=user_params,
+        whitelist=whitelist,
+    )
+    if not local_users:
+        # Retry without provider filter in case the filter is unsupported
+        local_users = call_vast_api(
+            client=client,
+            endpoint='users',
+            method='get',
+            params={'name': user_name},
+            whitelist=whitelist,
+        )
+        if provider_id is not None:
+            local_users = [
+                u for u in local_users
+                if (u.get('local_provider') or {}).get('id') == provider_id
+                or u.get('local_provider_id') == provider_id
+            ]
+    if not local_users:
+        raise ValueError(
+            f"Local user object for '{user_name}' not found"
+            + (f" under provider '{provider_name}'" if provider_name else "")
+        )
+    if len(local_users) > 1:
+        raise ValueError(
+            f"Ambiguous local user '{user_name}': found {len(local_users)} user objects"
+        )
+
+    user_obj = local_users[0]
+    user_id = user_obj.get('id')
+    if user_id is None:
+        raise ValueError(f"Local user '{user_name}' has no id; cannot create access key")
+
+    # Whitelist: access_keys is a sub-endpoint of users; require users POST
+    if 'users' not in whitelist:
+        raise ValueError(
+            "Access denied: API endpoint 'users' is not whitelisted for S3 key creation."
+        )
+    allowed_methods = whitelist.get('users', [])
+    if 'post' not in allowed_methods:
+        raise ValueError(
+            "Access denied: HTTP method 'POST' is not allowed for endpoint 'users' "
+            "(required for users/{id}/access_keys)."
+        )
+
+    logging.info(
+        f"Creating S3 key for user={user_name} id={user_id} tenant={tenant_name} "
+        f"provider={provider_name} on cluster={cluster_address}"
+    )
+    try:
+        created = client.users[user_id].access_keys.post(tenant_id=tenant_id)
+    except Exception as e:
+        logging.error(f"Failed to create S3 key for user '{user_name}': {e}")
+        raise
+
+    if isinstance(created, list):
+        created = created[0] if created else {}
+    if not isinstance(created, dict):
+        created = {}
+
+    result: Dict[str, Any] = {
+        'Cluster': cluster_address,
+        'User': matched_user.get('name') or user_name,
+        'Login Name': matched_user.get('login_name') or user_obj.get('name') or user_name,
+        'User ID': user_id,
+        'UID': matched_user.get('uid') or user_obj.get('uid'),
+        'Tenant': tenant_name,
+        'Tenant ID': tenant_id,
+        'Tenant Defaulted': tenant_was_defaulted,
+        'Provider': provider_name,
+        'Provider ID': provider_id,
+        'Existing Keys Before Create': existing_key_count,
+        'Access Key': created.get('access_key'),
+        'Secret Key': created.get('secret_key'),
+        'S3 Info': matched_user.get('s3 info') or matched_user.get('s3_info') or '',
+        'Identity Policies': matched_user.get('identity policies') or '',
+        'Origins': matched_user.get('origins') or '',
+    }
+    if tenant_was_defaulted:
+        result['Note'] = "Tenant was not provided; used default tenant."
+    return result
 
