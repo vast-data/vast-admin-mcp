@@ -1175,20 +1175,25 @@ def apply_ordering(data: List[Dict], order_configs: List[Dict[str, str]], remove
         direction = order_config['direction']
         reverse = (direction == 'dec')
         
-        # Sort key function that handles None and numeric values properly
+        # Sort key function that handles None and numeric values properly.
+        # Keys are (group, value) tuples so values of different types are never
+        # compared directly (e.g. None next to ints in an "iops" column used to
+        # raise TypeError: '<' not supported between 'str' and 'int').
         def sort_key(x):
             value = x.get(field)
-            # Handle None values - treat as 0 for numeric fields, empty string for others
+            # Handle None values - treat as 0 for numeric fields, smallest value for others
             if value is None:
                 # Check if this is a numeric field based on field name
                 if isinstance(field, str) and any(keyword in field.lower() for keyword in ['capacity', 'size', 'limit', 'used', 'quota']):
-                    return 0
-                return ''
+                    return (1, 0)
+                return (0, 0)
             # Return numeric value for proper numeric sorting
             if isinstance(value, (int, float)):
-                return value
+                return (1, value)
             # For strings, return as-is
-            return value
+            if isinstance(value, str):
+                return (2, value)
+            return (3, str(value))
         
         sorted_data = sorted(sorted_data, key=sort_key, reverse=reverse)
     
