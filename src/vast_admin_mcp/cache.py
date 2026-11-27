@@ -70,12 +70,30 @@ class CacheManager:
                 self._caches[cache_name] = {}
                 self._cache_timestamps[cache_name] = {}
             
+            now = time.time()
             self._caches[cache_name][key] = value
-            self._cache_timestamps[cache_name][key] = time.time()
+            self._cache_timestamps[cache_name][key] = now
             
             # Set TTL for this cache if provided
             if ttl is not None:
                 self._cache_ttls[cache_name] = ttl
+
+            # get() only drops an expired entry when the same key is read again. Keys that are
+            # never read again (e.g. per-request clients keyed by a token that has since been
+            # rotated) would stay forever, so sweep expired entries of this cache on each write.
+            self._evict_expired_locked(cache_name, now)
+
+    def _evict_expired_locked(self, cache_name: str, now: float) -> None:
+        """Drop expired entries of one cache. Caller must hold self._lock."""
+        ttl = self._cache_ttls.get(cache_name)
+        if ttl is None:
+            return
+        timestamps = self._cache_timestamps.get(cache_name, {})
+        cache = self._caches.get(cache_name, {})
+        expired = [k for k, ts in timestamps.items() if now - ts > ttl]
+        for k in expired:
+            cache.pop(k, None)
+            timestamps.pop(k, None)
     
     def clear(self, cache_name: Optional[str] = None) -> None:
         """Clear cache(s).

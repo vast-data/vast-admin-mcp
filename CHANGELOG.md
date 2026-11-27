@@ -2,6 +2,12 @@
 
 All notable changes to this project will be documented in this file.
 
+## [Unreleased]
+
+### Fixed
+
+- **Expired cache entries** -- `CacheManager` now drops expired entries of a cache on every write. Before, an expired entry was only removed when the same key was read again, so per-request clients (`bearer_client`, keyed by token fingerprint) piled up for every rotated VMS token and were never freed on a long-running HTTP server.
+
 ## [0.2.8] - 2026-11-18
 
 ### Added
